@@ -36,5 +36,18 @@ case "$MODE" in
 esac
 
 # shellcheck disable=SC2086
-"$CC" $WARN $DEFS $FLAGS -o adda src/*.c -lm
+
+# interpreter (listed by hand, because gui.c has its own entry point and must
+# not be linked into the console build)
+"$CC" $WARN $DEFS $FLAGS -o adda \
+    src/arena.c src/error.c src/value.c src/map.c \
+    src/lexer.c src/parser.c src/interp.c src/repl.c src/main.c -lm
 echo "built ./adda ($MODE)"
+
+# GUI (Windows only).
+# Win32 headers do not survive -Wpedantic -Werror, so the front-end keeps the
+# warnings but not the promotion to errors.
+if [ "$(uname -o 2>/dev/null)" = "Msys" ] || [ "$OS" = "Windows_NT" ]; then
+    "$CC" -std=c99 -Wall -Wextra $DEFS $FLAGS -mwindows -o adda-gui src/gui.c
+    echo "built ./adda-gui ($MODE)"
+fi

@@ -3,3 +3,6 @@ adda.exe
 adda-test
 adda-test.exe
 *.o
+adda-gui
+adda-gui.exe
+.claude/settings.local.json
