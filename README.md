@@ -130,6 +130,28 @@ adda> print {total}
 | `:help` | A short reminder of the above |
 | `:quit` | Leave — Ctrl-D does the same |
 
+## The window
+
+`./build.sh` also produces `adda-gui`, a small window with a code box, an
+output box and an input line. Put it next to `adda.exe` and double-click it.
+
+Press **Run** (or Ctrl+Enter) and the program starts in the background while
+output appears as it happens. When it reaches an `ask`, type the answer into
+the input line and press Enter:
+
+```
+Code:     name = ask What is your name?
+          print Hello, {name}
+
+Output:   What is your name? Rocco
+          Hello, Rocco
+
+Input:    [                    ] [Send]
+```
+
+**Stop** ends a program that is waiting or looping. The input line is only
+active while something is running.
+
 ## The whole language
 
 ```adda

@@ -528,6 +528,11 @@ static void do_print(Node *n, Scope *sc)
 
     value_print(v);
     fputc('\n', stdout);
+
+    /* Flush every line. Into a pipe stdout is block-buffered, so without this
+     * a GUI or a log sees nothing until the program ends, and output arrives
+     * out of order against the unbuffered error stream. */
+    fflush(stdout);
 }
 
 static Flow exec(Node *n, Scope *sc, Value *ret)

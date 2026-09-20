@@ -400,7 +400,24 @@ Three commands are not Adda code but instructions to the prompt itself:
 | `:help` | A short reminder |
 | `:quit` | Leaves. Ctrl-D does the same thing |
 
-## 13. Full list of words Adda reserves
+## 13. The window
+
+`adda-gui` is a small window with a code box, an output box and an input line.
+It runs your program through the same `adda` you use from the command line.
+
+Press **Run** (or Ctrl+Enter). Output appears as it happens rather than all at
+the end, so when your program reaches an `ask`, the question shows up and waits.
+Type the answer into the input line at the bottom and press Enter:
+
+```
+Output:   What is your name? Rocco
+          Hello, Rocco
+```
+
+**Stop** ends a program that is waiting for input it is never going to get, or
+one stuck in a loop. The input line only works while something is running.
+
+## 14. Full list of words Adda reserves
 
 `print` `if` `else` `while` `for` `each` `in` `define` `with` `return` `call`
 `add` `to` `remove` `end` `list` `map` `item` `length` `has` `ask` `of`

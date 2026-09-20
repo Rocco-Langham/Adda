@@ -44,10 +44,8 @@ esac
     src/lexer.c src/parser.c src/interp.c src/repl.c src/main.c -lm
 echo "built ./adda ($MODE)"
 
-# GUI (Windows only).
-# Win32 headers do not survive -Wpedantic -Werror, so the front-end keeps the
-# warnings but not the promotion to errors.
+# GUI (Windows only). Same warning flags as everything else.
 if [ "$(uname -o 2>/dev/null)" = "Msys" ] || [ "$OS" = "Windows_NT" ]; then
-    "$CC" -std=c99 -Wall -Wextra $DEFS $FLAGS -mwindows -o adda-gui src/gui.c
+    "$CC" $WARN $DEFS $FLAGS -mwindows -o adda-gui src/gui.c
     echo "built ./adda-gui ($MODE)"
 fi
