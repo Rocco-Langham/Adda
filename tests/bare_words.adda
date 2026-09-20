@@ -1,0 +1,31 @@
+# A bare word that names a variable means that variable...
+count = 5
+copy = count
+print {copy}
+print count
+
+# ...and a bare word that names nothing is just the word.
+name = Rocco
+print {name}
+greeting = hello there
+print {greeting}
+
+# It applies when passing values to a function,
+define double with n
+    return n * 2
+end
+print {call double with count}
+
+# when storing into a list,
+nums = list 0, 0
+item 1 of nums = count
+print {nums}
+
+# and when storing into a map.
+person = map
+age of person = count
+print {person}
+
+# Quotes force the word even when a variable of that name exists.
+word = "count"
+print {word}

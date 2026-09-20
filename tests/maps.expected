@@ -1,0 +1,9 @@
+{name: Rocco, age: 30}
+Rocco
+2
+Rocco
+name = Rocco
+age = 30
+{name: Rocco}
+{c: 3, a: 1, b: 2}
+exit: 0

@@ -1,0 +1,24 @@
+person = map
+name of person = Rocco
+age of person = 30
+print {person}
+print {name of person}
+print {length of person}
+
+# a key held in a variable
+k = name
+print {item k of person}
+
+for each key in person
+    print {key} = {item key of person}
+end
+
+remove age of person
+print {person}
+
+# keys keep the order they were added in
+letters = map
+c of letters = 3
+a of letters = 1
+b of letters = 2
+print {letters}

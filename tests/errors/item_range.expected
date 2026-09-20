@@ -1,0 +1,4 @@
+tests/errors/item_range.adda:2: there is no item 9 - this list has 2
+     2 | print {item 9 of nums}
+       | ^
+exit: 65

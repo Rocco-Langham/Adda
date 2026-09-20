@@ -1,0 +1,35 @@
+score = 15
+if score > 10
+    print You win
+else if score > 5
+    print Close
+else
+    print Try again
+end
+
+x = 5
+if 1 < x < 10
+    print In range
+end
+
+if score > 10 and score < 20
+    print Between
+end
+
+if not score > 100
+    print Not huge
+end
+
+name = Rocco
+if name is Rocco
+    print Name matched
+end
+if name is not Bob
+    print Not Bob
+end
+
+count = 0
+while count < 3
+    print count is {count}
+    count = count + 1
+end

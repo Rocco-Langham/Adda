@@ -1,0 +1,23 @@
+# Lists, maps and text all together.
+prices = map
+apples of prices = 1.20
+bread of prices = 2.50
+cheese of prices = 4.75
+
+basket = list apples, bread, apples, cheese
+
+total = 0
+for each thing in basket
+    cost = item thing of prices
+    print {thing} costs {cost}
+    total = total + cost
+end
+
+print ----------------
+print Total: {total}
+
+if total > 10
+    print That is a big shop
+else
+    print That is a small shop
+end

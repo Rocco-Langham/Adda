@@ -1,0 +1,2 @@
+nums = list 1, 2
+print {item 9 of nums}

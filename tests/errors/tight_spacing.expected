@@ -1,0 +1,5 @@
+adda: a test has to be true or false. If you meant maths, put spaces around it: x > 5, not x>5
+tests/errors/tight_spacing.adda:2: this test gave text, but a test has to be true or false
+     2 | if x>5
+       | ^
+exit: 65

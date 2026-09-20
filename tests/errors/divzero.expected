@@ -1,0 +1,4 @@
+tests/errors/divzero.adda:1: I cannot divide by zero
+     1 | x = 1 / 0
+       | ^
+exit: 65

@@ -1,0 +1,4 @@
+tests/errors/no_such_function.adda:1: there is no function called 'nope'
+     1 | print {call nope with 1}
+       | ^
+exit: 65

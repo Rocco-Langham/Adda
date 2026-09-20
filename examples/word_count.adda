@@ -1,0 +1,18 @@
+# Counting how often each word appears.
+words = list the, quick, brown, fox, jumps, over, the, lazy, dog, the, fox
+counts = map
+
+for each w in words
+    if has w of counts
+        item w of counts = item w of counts + 1
+    else
+        item w of counts = 1
+    end
+end
+
+print {length of counts} different words
+
+# Maps remember the order keys were added in.
+for each word in counts
+    print {word}: {item word of counts}
+end

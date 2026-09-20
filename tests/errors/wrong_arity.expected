@@ -1,0 +1,4 @@
+tests/errors/wrong_arity.adda:4: 'f' needs 1 input, but got 2
+     4 | print {call f with 1, 2}
+       | ^
+exit: 65

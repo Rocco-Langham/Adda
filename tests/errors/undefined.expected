@@ -1,0 +1,4 @@
+tests/errors/undefined.adda:1: 'nope' is not defined
+     1 | print {nope}
+       | ^
+exit: 65

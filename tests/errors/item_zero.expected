@@ -1,0 +1,4 @@
+tests/errors/item_zero.adda:2: there is no item 0 - Adda counts from 1
+     2 | print {item 0 of nums}
+       | ^
+exit: 65

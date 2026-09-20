@@ -1,0 +1,4 @@
+tests/errors/misspelled.adda:2: 'totl' is not defined - did you mean 'total'?
+     2 | print {totl}
+       | ^
+exit: 65

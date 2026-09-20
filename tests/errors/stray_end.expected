@@ -1,0 +1,4 @@
+tests/errors/stray_end.adda:2: there is no open block for this 'end'
+     2 | end
+       | ^
+exit: 65

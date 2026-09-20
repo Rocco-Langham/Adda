@@ -1,0 +1,4 @@
+tests/errors/forgot_print.adda:1: I do not know what to do with this line - did you mean 'print hello world'?
+     1 | hello world
+       | ^
+exit: 65

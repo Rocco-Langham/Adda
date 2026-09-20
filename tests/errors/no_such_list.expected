@@ -1,0 +1,4 @@
+tests/errors/no_such_list.adda:1: 'nums' is not defined
+     1 | print {nums}
+       | ^
+exit: 65
