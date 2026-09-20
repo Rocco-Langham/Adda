@@ -132,29 +132,39 @@ adda> print {total}
 
 ## The window
 
-`./build.sh` also produces `adda-gui`, a small window with a code box, an
-output box and an input line. Put it next to `adda.exe` and double-click it.
-
-Press **Run** (or Ctrl+Enter) and the program starts in the background while
-output appears as it happens. When it reaches an `ask`, type the answer into
-the input line and press Enter:
+`./build.sh` also produces `adda-gui`. Put it next to `adda.exe` and
+double-click it.
 
 ```
-Code:     name = ask What is your name?
-          print Hello, {name}
-
-Output:   What is your name? Rocco
-          Hello, Rocco
-
-Input:    [                    ] [Send]
+┌────┬────────────┬──────────────────────────────────┐
+│ 📄 │ EXPLORER   │  [ Run ]  [ Stop ]               │
+│ 🔍 │ hello.adda ├──────────────────────────────────┤
+│    │ ask.adda   │  name = ask What is your name?   │
+│    │ lists.adda │  print Hello, {name}             │
+│    │            ╞═════ drag to resize ═════════════╡
+│    │            │  What is your name? Rocco        │
+│ 📕 │            │  Hello, Rocco                    │
+│ ⚙  │            │                                  │
+└────┴────────────┴──────────────────────────────────┘
 ```
 
-**Stop** ends a program that is waiting or looping. The input line is only
-active while something is running. **F11** goes full screen.
+Down the left is an activity bar. **Explorer** lists the `.adda` files next to
+the program and in `examples/`; click one to open it. **Search** finds text in
+your code. Clicking the icon you are already on collapses the panel.
 
-The cog in the top right picks the look — **Follow Windows**, **Light**,
-**Dark** or the original **Beige** — and remembers it between sessions. On
-Follow Windows it switches with the system as you change it.
+Press **Run** (or Ctrl+Enter). Output appears in the lower box as it happens,
+and **that box is also where you type**: when your program reaches an `ask`,
+the question appears and you answer it right there and press Enter. Everything
+already printed is fixed; only the line you are typing can be edited.
+
+Drag the divider between the two boxes to resize them, or double-click it to
+even them up. **F11** goes full screen.
+
+At the bottom of the bar, the **book** opens a searchable cheat sheet — type
+what you want to do and double-click an entry to drop the code into your
+program. The **cog** opens Settings, where **Themes** offers Follow Windows,
+Light, Dark, Beige and **Abyss** (the VS Code theme, using its real colours).
+Your choice is remembered.
 
 ## The whole language
 

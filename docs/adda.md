@@ -402,24 +402,38 @@ Three commands are not Adda code but instructions to the prompt itself:
 
 ## 13. The window
 
-`adda-gui` is a small window with a code box, an output box and an input line.
-It runs your program through the same `adda` you use from the command line.
+`adda-gui` runs your program through the same `adda` you use from the command
+line, in a window with a code box above and a console below.
 
-Press **Run** (or Ctrl+Enter). Output appears as it happens rather than all at
-the end, so when your program reaches an `ask`, the question shows up and waits.
-Type the answer into the input line at the bottom and press Enter:
+**Run** (or Ctrl+Enter) starts it. Output appears as it happens rather than all
+at the end, so when your program reaches an `ask`, the question shows up and
+waits — and you answer it **in the console itself**, right where the question
+is:
 
 ```
-Output:   What is your name? Rocco
-          Hello, Rocco
+What is your name? Rocco
+Hello, Rocco
 ```
 
+Everything already printed is fixed; only the line you are typing can be
+changed, and Enter sends it. **Esc** clears a line you have half typed.
 **Stop** ends a program that is waiting for input it is never going to get, or
-one stuck in a loop. The input line only works while something is running, and
-**F11** goes full screen.
+one stuck in a loop.
 
-The cog in the top right chooses the look: follow your Windows setting, or pick
-Light, Dark or Beige. Whatever you choose is remembered for next time.
+Drag the divider between the code and the console to give either one more room,
+or double-click it to split them evenly. **F11** goes full screen.
+
+Down the left side:
+
+| Icon | What it does |
+|---|---|
+| Explorer | Lists the `.adda` files beside the program and in `examples/`. Click one to open it. |
+| Search | Finds text in your code; Enter jumps to the next match. |
+| Cheat sheet | Everything in this guide as searchable one-liners. Double-click one to put the code into your program. |
+| Settings | **Themes**: Follow Windows, Light, Dark, Beige, or Abyss. |
+
+Clicking the Explorer or Search icon you are already on closes the panel again.
+Whichever theme you pick is remembered for next time.
 
 ## 14. Full list of words Adda reserves
 
