@@ -150,7 +150,11 @@ Input:    [                    ] [Send]
 ```
 
 **Stop** ends a program that is waiting or looping. The input line is only
-active while something is running.
+active while something is running. **F11** goes full screen.
+
+The cog in the top right picks the look — **Follow Windows**, **Light**,
+**Dark** or the original **Beige** — and remembers it between sessions. On
+Follow Windows it switches with the system as you change it.
 
 ## The whole language
 

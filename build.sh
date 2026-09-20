@@ -45,7 +45,13 @@ esac
 echo "built ./adda ($MODE)"
 
 # GUI (Windows only). Same warning flags as everything else.
+# The manifest resource is what gives themed controls and DPI awareness;
+# without it the buttons are drawn in the Windows 95 style and the window is
+# stretched and blurry on a high-DPI screen.
 if [ "$(uname -o 2>/dev/null)" = "Msys" ] || [ "$OS" = "Windows_NT" ]; then
-    "$CC" $WARN $DEFS $FLAGS -mwindows -o adda-gui src/gui.c
+    "${WINDRES:-windres}" -I src src/adda-gui.rc -o adda-gui-res.o
+    "$CC" $WARN $DEFS $FLAGS -mwindows -o adda-gui \
+        src/gui.c adda-gui-res.o \
+        -lcomctl32 -ldwmapi -luxtheme -lgdi32
     echo "built ./adda-gui ($MODE)"
 fi

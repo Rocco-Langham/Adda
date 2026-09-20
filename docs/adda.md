@@ -415,7 +415,11 @@ Output:   What is your name? Rocco
 ```
 
 **Stop** ends a program that is waiting for input it is never going to get, or
-one stuck in a loop. The input line only works while something is running.
+one stuck in a loop. The input line only works while something is running, and
+**F11** goes full screen.
+
+The cog in the top right chooses the look: follow your Windows setting, or pick
+Light, Dark or Beige. Whatever you choose is remembered for next time.
 
 ## 14. Full list of words Adda reserves
 
