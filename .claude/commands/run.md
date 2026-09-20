@@ -1,0 +1,1 @@
+Build the Adda project and launch the GUI. Run: bash gui.sh
