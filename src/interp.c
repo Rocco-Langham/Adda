@@ -227,6 +227,73 @@ static Value eval_binary(Node *n, Scope *sc)
     return nothing_value();
 }
 
+/* Reads one whole line, however long, with the ends trimmed. NULL at end of
+ * input - a program reading from a file that has run out, or from the GUI,
+ * which gives its child no input at all. */
+static Text *read_user_line(void)
+{
+    char buf[512];
+    char *acc = NULL;
+    size_t len = 0, cap = 0;
+    bool got = false;
+
+    for (;;) {
+        size_t n = 0;
+
+        if (!fgets(buf, sizeof buf, stdin)) break;
+        got = true;
+        n = strlen(buf);
+
+        if (len + n + 1 > cap) {
+            size_t want = cap < 256 ? 256 : cap;
+            char *grown;
+            while (want < len + n + 1) want *= 2;
+            grown = adda_alloc(want);
+            if (len) memcpy(grown, acc, len);
+            acc = grown;
+            cap = want;
+        }
+        memcpy(acc + len, buf, n);
+        len += n;
+        acc[len] = 0;
+
+        if (n > 0 && buf[n - 1] == '\n') break;
+    }
+
+    if (!got) return NULL;
+
+    {
+        size_t start = 0;
+        while (start < len && (acc[start] == ' '  || acc[start] == '\t' ||
+                               acc[start] == '\r' || acc[start] == '\n')) start++;
+        while (len > start && (acc[len - 1] == ' '  || acc[len - 1] == '\t' ||
+                               acc[len - 1] == '\r' || acc[len - 1] == '\n')) len--;
+        return text_new(acc + start, len - start);
+    }
+}
+
+static Value eval_ask(Node *n, Scope *sc)
+{
+    Text *answer;
+    double number;
+
+    if (n->a) {
+        value_print(eval(n->a, sc));
+        fputc(' ', stdout);
+    }
+    fflush(stdout);              /* the prompt has to appear before we wait */
+
+    answer = read_user_line();
+    if (!answer) return nothing_value();
+
+    /* An answer becomes a number under exactly the rule source literals use,
+     * so 30 is a number you can add to, while 007 keeps its zeros. */
+    if (adda_number_from_text(answer->bytes, answer->len, &number))
+        return number_value(number);
+
+    return text_value(answer);
+}
+
 static Value eval_index(Node *n, Scope *sc)
 {
     Value container = eval(n->b, sc);
@@ -349,6 +416,8 @@ static Value eval(Node *n, Scope *sc)
                        type_name(v.type));
             return nothing_value();
         }
+
+        case N_ASK: return eval_ask(n, sc);
 
         case N_HAS: {
             Value container = eval(n->b, sc);

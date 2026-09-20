@@ -140,7 +140,8 @@ static bool leading_keyword(P *p, uint32_t i)
 {
     return word_at(p, i, "list")  || word_at(p, i, "map")  ||
            word_at(p, i, "call")  || word_at(p, i, "item") ||
-           word_at(p, i, "length") || word_at(p, i, "has");
+           word_at(p, i, "length") || word_at(p, i, "has") ||
+           word_at(p, i, "ask");
 }
 
 /* The decision described at the top of this file. */
@@ -169,10 +170,20 @@ static bool run_is_value(P *p, uint32_t from, uint32_t to)
     if (p->t[from].kind == TK_LPAREN && match_close(p, from, to) == (int)to - 1)
         return run_is_value(p, from + 1, to - 1);
 
-    /* Operators count at any depth: brackets only show up when doing maths,
-     * so `total = (a + b) * 2` is caught even though the + is nested. */
-    for (i = from; i < to; i++)
-        if (is_op_kind(p->t[i].kind)) return true;
+    /* Only an operator outside every bracket decides the mode. One inside a
+     * {...} hole belongs to that hole, so `print Next year {age + 1}` stays
+     * text; `total = (a + b) * 2` is still maths because of the '*', and a run
+     * wrapped entirely in brackets was already handled just above. */
+    {
+        int depth = 0;
+
+        for (i = from; i < to; i++) {
+            TokenKind k = p->t[i].kind;
+            if (k == TK_LPAREN || k == TK_LBRACE) depth++;
+            else if (k == TK_RPAREN || k == TK_RBRACE) depth--;
+            else if (depth == 0 && is_op_kind(k)) return true;
+        }
+    }
 
     return false;
 }
@@ -412,6 +423,17 @@ static Node *primary(E *e)
         e->i++;
         expect_word(e, "of", "'length' is a special word in Adda: write 'length of <something>'. To use it as plain text, put it in quotes.");
         n->a = primary(e);
+        return n;
+    }
+
+    /* `ask <prompt>` reads a line from whoever is running the program. The
+     * prompt is an ordinary run, so `ask How old are you?` needs no quotes and
+     * `ask Hello {name}, how old are you?` fills in the value. */
+    if (token_is_word(t, "ask")) {
+        Node *n = node(N_ASK, line);
+        e->i++;
+        if (e->i < e->end) n->a = parse_run(p, e->i, e->end);
+        e->i = e->end;
         return n;
     }
 

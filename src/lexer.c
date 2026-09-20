@@ -87,9 +87,10 @@ static bool word_ends_at(const char *p)
     return false;
 }
 
-/* A word is a number if it is entirely numeric AND has no leading zero, so
- * that `code = 007` keeps its shape instead of quietly becoming 7. */
-static bool word_is_number(const char *s, uint32_t len, double *out)
+/* Text is a number if it is entirely numeric AND has no leading zero, so that
+ * `code = 007` keeps its shape. Typed input goes through the same test, so an
+ * answer behaves exactly like a literal would. */
+bool adda_number_from_text(const char *s, uint32_t len, double *out)
 {
     uint32_t i = 0;
     bool seen_digit = false, seen_dot = false;
@@ -219,7 +220,7 @@ TokenList lex_range(const char *base, const char *start, const char *end,
 
             t.start = word;
             t.len   = len;
-            if (word_is_number(word, len, &num)) {
+            if (adda_number_from_text(word, len, &num)) {
                 t.kind = TK_NUMBER;
                 t.number = num;
             } else {

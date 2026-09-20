@@ -172,6 +172,10 @@ TokenList lex_range(const char *base, const char *start, const char *end,
 const char *token_kind_name(TokenKind k);
 bool token_is_word(const Token *t, const char *word);
 
+/* The rule that decides a number from text. The lexer uses it on source words
+ * and `ask` uses it on what the user types, so both behave the same. */
+bool adda_number_from_text(const char *s, uint32_t len, double *out);
+
 /* ------------------------------------------------------------------ ast */
 
 typedef enum {
@@ -185,6 +189,7 @@ typedef enum {
     N_FIELD,      /* <name> of <b>, literal key */
     N_LENGTH,     /* length of <a> */
     N_HAS,        /* has <a> of <b> */
+    N_ASK,        /* ask <prompt> - reads a line from the person running it */
     N_CALL,
     /* statements */
     N_BLOCK, N_ASSIGN, N_PRINT, N_IF, N_WHILE, N_FOREACH,

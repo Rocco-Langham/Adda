@@ -26,9 +26,15 @@ for f in tests/*.adda tests/errors/*.adda tests/repl/*.in; do
     [ -e "$f" ] || continue
     expected="${f%.*}.expected"
 
+    # A test that uses `ask` puts its answers in a sibling .stdin file.
+    # Everything else reads from nowhere, so no test can ever sit waiting on
+    # the terminal.
+    input="${f%.*}.stdin"
+    [ -f "$input" ] || input=/dev/null
+
     case "$f" in
         *.in) out=$("$ADDA" < "$f" 2>&1) ;;
-        *)    out=$("$ADDA" "$f" 2>&1) ;;
+        *)    out=$("$ADDA" "$f" < "$input" 2>&1) ;;
     esac
     code=$?
     actual=$(printf '%s\nexit: %d\n' "$out" "$code" | tr -d '\r')

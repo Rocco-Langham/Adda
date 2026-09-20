@@ -50,6 +50,17 @@ If a piece of text has to contain an operator, quote it:
 title = "Chapter 1 - Intro"
 ```
 
+Reading input works the same way — no quotes around the question:
+
+```adda
+name = ask What is your name?
+age  = ask How old are you?
+print Next year you will be {age + 1}
+```
+
+An answer becomes a number under exactly the rule source literals use, so `30`
+is something you can add to, while `007` keeps its zeros.
+
 A bare word that happens to name a variable means that variable, so copying
 values reads the way you would expect:
 
@@ -130,6 +141,7 @@ ok = true                       # true / false / nothing
 next = age + 1                  # + - * / %
 
 print Hello {name}              # print takes the same rule as the right of '='
+who = ask What is your name?    # reads a line from whoever runs the program
 
 if age > 18                     # is, is not, < > <= >=, and, or, not
     print Adult

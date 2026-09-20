@@ -1,0 +1,31 @@
+name = ask What is your name?
+print Hello, {name}
+
+age = ask How old are you?
+print Next year you will be {age + 1}
+
+# an answer becomes a number under the same rule source uses
+code = ask Enter a code
+print The code is {code}
+if code is 007
+    print codes match as text
+end
+
+# no prompt at all
+print Say something
+said = ask
+print You said {said}
+
+# comparing against a word works because bare words in a test are soft
+answer = ask Do you agree?
+if answer is yes
+    print You agreed
+else
+    print You did not agree
+end
+
+# when the input runs out, ask gives nothing back
+missing = ask Anything else?
+if missing is nothing
+    print There was nothing left to read
+end

@@ -82,7 +82,53 @@ And quotes always win:
 word = "count"          # the word count, even though count exists
 ```
 
-## 4. True, false and nothing
+## 4. Asking a question
+
+`ask` reads a line from whoever is running the program. The question needs no
+quotes, same as `print`:
+
+```adda
+name = ask What is your name?
+print Hello, {name}
+```
+
+The answer becomes a **number** when it looks like one, under exactly the same
+rule the language uses for numbers you type in your source:
+
+```adda
+age = ask How old are you?
+print Next year you will be {age + 1}
+```
+
+So `30` is a number you can do maths with, while `007` stays as text and keeps
+its zeros — just as `code = 007` would in a program.
+
+Spaces at either end of the answer are trimmed, and the question can contain
+values like any other text:
+
+```adda
+count = 1
+thing = ask Thing {count}?
+```
+
+Leave the question out to read a line with no prompt at all:
+
+```adda
+print Type something
+said = ask
+```
+
+If the input runs out — the file being piped in ends, or nothing is connected —
+`ask` gives back `nothing`, which you can check for:
+
+```adda
+answer = ask Anything else?
+if answer is nothing
+    print There was nothing left to read
+end
+```
+
+## 5. True, false and nothing
 
 ```adda
 ok = true
@@ -90,7 +136,7 @@ done = false
 result = nothing
 ```
 
-## 5. Making decisions
+## 6. Making decisions
 
 ```adda
 if age > 18
@@ -140,7 +186,7 @@ end
 A test has to come out true or false. `if count` is an error — Adda will tell
 you to write `if count > 0`.
 
-## 6. Repeating
+## 7. Repeating
 
 ```adda
 count = 0
@@ -150,7 +196,7 @@ while count < 5
 end
 ```
 
-## 7. Functions
+## 8. Functions
 
 ```adda
 define greet with person
@@ -185,7 +231,7 @@ A function can be called before the line that defines it — Adda reads them all
 first. Functions live on their own, at the outer level of a file; you cannot
 define one inside an `if` or another function.
 
-## 8. Lists
+## 9. Lists
 
 ```adda
 nums = list 10, 20, 30
@@ -229,7 +275,7 @@ scores = list
 add 10 to scores
 ```
 
-## 9. Maps
+## 10. Maps
 
 A map holds values under names.
 
@@ -266,7 +312,7 @@ for each key in person
 end
 ```
 
-## 10. When something is wrong
+## 11. When something is wrong
 
 Adda points at the line and says what it expected:
 
@@ -287,7 +333,7 @@ Common ones:
 | `'item' is a special word in Adda` | Use quotes to write it as text |
 | `'+' adds numbers, and one of these is text` | Join text with braces: `{a} {b}` |
 
-## 11. Trying things out
+## 12. Trying things out
 
 Run `adda` with no file and you can type code straight at it. This is the
 quickest way to find out what something does.
@@ -354,16 +400,16 @@ Three commands are not Adda code but instructions to the prompt itself:
 | `:help` | A short reminder |
 | `:quit` | Leaves. Ctrl-D does the same thing |
 
-## 12. Full list of words Adda reserves
+## 13. Full list of words Adda reserves
 
 `print` `if` `else` `while` `for` `each` `in` `define` `with` `return` `call`
-`add` `to` `remove` `end` `list` `map` `item` `length` `has` `of` `is` `not`
-`and` `or` `true` `false` `nothing`
+`add` `to` `remove` `end` `list` `map` `item` `length` `has` `ask` `of`
+`is` `not` `and` `or` `true` `false` `nothing`
 
-`list`, `map`, `item`, `length`, `call` and `has` cannot be used as variable
-names, because they start a value. The rest are fine as ordinary words in text.
+`list`, `map`, `item`, `length`, `call`, `has` and `ask` cannot be used as
+variable names, because they start a value. The rest are fine as ordinary words in text.
 
-## 13. Things to watch out for
+## 14. Things to watch out for
 
 - `range = 1 - 10` really is maths. Write `1-10` or `"1 - 10"`.
 - `#` starts a comment wherever a word could start, so
