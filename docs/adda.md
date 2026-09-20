@@ -287,7 +287,74 @@ Common ones:
 | `'item' is a special word in Adda` | Use quotes to write it as text |
 | `'+' adds numbers, and one of these is text` | Join text with braces: `{a} {b}` |
 
-## 11. Full list of words Adda reserves
+## 11. Trying things out
+
+Run `adda` with no file and you can type code straight at it. This is the
+quickest way to find out what something does.
+
+```
+$ ./adda
+Adda - type :help for help, :quit to leave.
+adda> 2 + 2
+4
+```
+
+A line on its own shows you its value, so you do not need `print` while you are
+poking around:
+
+```
+adda> name = Rocco
+adda> name
+Rocco
+adda> length of name
+5
+```
+
+Blocks work exactly as they do in a file — the prompt changes to `...` and
+keeps reading until your `end` arrives:
+
+```
+adda> count = 0
+adda> while count < 3
+  ...     print counting {count}
+  ...     count = count + 1
+  ... end
+counting 0
+counting 1
+counting 2
+```
+
+Functions stay defined for the rest of the session, so you can build something
+up in pieces and try it as you go:
+
+```
+adda> define double with n
+  ...     return n * 2
+  ... end
+adda> call double with 21
+42
+```
+
+Getting something wrong is not fatal. Adda says what went wrong and waits for
+the next line:
+
+```
+adda> print {tota}
+typed:9: 'tota' is not defined - did you mean 'total'?
+       9 | print {tota}
+         | ^
+adda> 
+```
+
+Three commands are not Adda code but instructions to the prompt itself:
+
+| Command | What it does |
+|---|---|
+| `:vars` | Lists every variable and function you have made |
+| `:help` | A short reminder |
+| `:quit` | Leaves. Ctrl-D does the same thing |
+
+## 12. Full list of words Adda reserves
 
 `print` `if` `else` `while` `for` `each` `in` `define` `with` `return` `call`
 `add` `to` `remove` `end` `list` `map` `item` `length` `has` `of` `is` `not`
@@ -296,7 +363,7 @@ Common ones:
 `list`, `map`, `item`, `length`, `call` and `has` cannot be used as variable
 names, because they start a value. The rest are fine as ordinary words in text.
 
-## 12. Things to watch out for
+## 13. Things to watch out for
 
 - `range = 1 - 10` really is maths. Write `1-10` or `"1 - 10"`.
 - `#` starts a comment wherever a word could start, so

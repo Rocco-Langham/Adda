@@ -451,7 +451,13 @@ static void assign_to(Node *target, Value v, Scope *sc)
 
 static void do_print(Node *n, Scope *sc)
 {
-    value_print(eval(n->a, sc));
+    Value v = eval(n->a, sc);
+
+    /* n->flag marks a REPL echo rather than a real `print`. Calling a function
+     * that returns nothing should not spray "nothing" down the screen. */
+    if (n->flag && IS_NOTHING(v)) return;
+
+    value_print(v);
     fputc('\n', stdout);
 }
 
@@ -598,11 +604,37 @@ static void hoist_functions(Node *block)
     }
 }
 
-void interpret(Node *program)
+void interp_init(void)
+{
+    globals = scope_new(NULL);
+}
+
+void interp_run(Node *program)
 {
     Value ret = nothing_value();
 
-    globals = scope_new(NULL);
     hoist_functions(program);
     exec(program, globals, &ret);
+}
+
+void interpret(Node *program)
+{
+    interp_init();
+    interp_run(program);
+}
+
+/* For the REPL's :vars command. */
+void interp_show_variables(void)
+{
+    uint32_t i;
+
+    if (globals->count == 0) {
+        puts("nothing is defined yet");
+        return;
+    }
+    for (i = 0; i < globals->count; i++) {
+        printf("%s = ", globals->names[i]->bytes);
+        value_print(globals->vals[i]);
+        putchar('\n');
+    }
 }

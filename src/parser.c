@@ -23,6 +23,7 @@ typedef struct {
     uint32_t  i;             /* statement cursor */
     int       in_condition;  /* bare words resolve softly inside a condition */
     int       depth;         /* block nesting; functions must be at depth 0 */
+    int       interactive;   /* REPL: a bare expression is a statement */
 } P;
 
 /* A cursor over one token range, used while parsing an expression. */
@@ -876,6 +877,14 @@ static Node *statement(P *p)
         return n;
     }
 
+    /* In the REPL, a line on its own is something you want to look at. */
+    if (p->interactive) {
+        Node *n = node(N_EXPRSTMT, line);
+        n->a = parse_run(p, s, e);
+        end_line(p, e);
+        return n;
+    }
+
     adda_error_at(p->t[s].start, line,
                   "I do not know what to do with this line - did you mean 'print %.*s'?",
                   (int)(token_end(&p->t[e - 1]) - p->t[s].start), p->t[s].start);
@@ -903,7 +912,7 @@ static Node *parse_block(P *p, int stops, const char *opener, uint32_t opener_li
     }
 }
 
-Node *parse(TokenList tokens)
+Node *parse_mode(TokenList tokens, bool interactive)
 {
     P p;
 
@@ -912,6 +921,12 @@ Node *parse(TokenList tokens)
     p.i = 0;
     p.in_condition = 0;
     p.depth = 0;
+    p.interactive = interactive ? 1 : 0;
 
     return parse_block(&p, 0, "program", 1);
+}
+
+Node *parse(TokenList tokens)
+{
+    return parse_mode(tokens, false);
 }

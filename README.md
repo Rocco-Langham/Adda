@@ -82,6 +82,43 @@ That produces `./adda`. Run a program with:
 Other flags: `--tokens` shows how the lexer split your source, and `--stats`
 reports how much memory the run used.
 
+## Typing at it
+
+Run `./adda` with no file and you get a prompt. A line on its own shows you its
+value, and a block keeps reading until you type `end`:
+
+```
+$ ./adda
+Adda - type :help for help, :quit to leave.
+adda> 2 + 2
+4
+adda> name = Rocco
+adda> name
+Rocco
+adda> if 2 > 1
+  ...     print yes, {name}
+  ... end
+yes, Rocco
+```
+
+Anything you define stays defined, so you can build up a program a piece at a
+time. A mistake reports itself and the session carries on:
+
+```
+adda> print {totl}
+typed:7: 'totl' is not defined - did you mean 'total'?
+       7 | print {totl}
+         | ^
+adda> print {total}
+10
+```
+
+| Command | What it does |
+|---|---|
+| `:vars` | Show everything you have defined |
+| `:help` | A short reminder of the above |
+| `:quit` | Leave — Ctrl-D does the same |
+
 ## The whole language
 
 ```adda
@@ -175,6 +212,7 @@ something to fix before writing a game loop.
 | `src/lexer.c` | Tokens, and the space-around-operators rule |
 | `src/parser.c` | The text-vs-maths decision, and the whole grammar |
 | `src/interp.c` | Scopes, evaluation, control flow |
+| `src/repl.c` | The interactive prompt: continuation lines, error recovery |
 | `src/value.c`, `src/map.c` | Text, lists, and the ordered hash map |
 | `src/error.c` | Messages with a line, the source line and a caret |
 | `src/arena.c` | The bump allocator |

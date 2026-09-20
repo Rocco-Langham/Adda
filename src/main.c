@@ -1,5 +1,7 @@
 /* adda - run an Adda program.
  *
+ * Usage:
+ *   adda                     start an interactive session
  *   adda program.adda        run it
  *   adda --tokens file       show how the lexer split the source
  *   adda --stats file        run it, then report arena bytes used
@@ -51,7 +53,8 @@ static void dump_tokens(const char *src)
 
 static void usage(void)
 {
-    fputs("usage: adda [--tokens|--ast|--stats] program.adda\n", stderr);
+    fputs("usage: adda [--tokens|--ast|--stats] program.adda\n"
+          "       adda                      start an interactive session\n", stderr);
     exit(64);
 }
 
@@ -71,9 +74,18 @@ int main(int argc, char **argv)
         else if (!path) path = argv[i];
         else usage();
     }
-    if (!path) usage();
+    if (!path && mode) usage();
 
     arena_init();
+
+    /* No file to run means an interactive session. The REPL handles its own
+     * errors, so it must not share main's one-shot handler. */
+    if (!path) {
+        repl();
+        fflush(stdout);
+        arena_free_all();
+        return 0;
+    }
 
     if (setjmp(adda_error_jmp) != 0) {
         arena_free_all();

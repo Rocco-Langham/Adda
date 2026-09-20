@@ -21,11 +21,15 @@ accept=0
 pass=0
 fail=0
 
-for f in tests/*.adda tests/errors/*.adda; do
+# tests/*.adda are run as files; tests/repl/*.in are typed at the prompt.
+for f in tests/*.adda tests/errors/*.adda tests/repl/*.in; do
     [ -e "$f" ] || continue
-    expected="${f%.adda}.expected"
+    expected="${f%.*}.expected"
 
-    out=$("$ADDA" "$f" 2>&1)
+    case "$f" in
+        *.in) out=$("$ADDA" < "$f" 2>&1) ;;
+        *)    out=$("$ADDA" "$f" 2>&1) ;;
+    esac
     code=$?
     actual=$(printf '%s\nexit: %d\n' "$out" "$code" | tr -d '\r')
 

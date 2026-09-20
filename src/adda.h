@@ -206,9 +206,19 @@ struct Node {
 };
 
 Node *parse(TokenList tokens);
+/* Interactive parsing lets a bare expression stand as a statement, so the REPL
+ * can echo it instead of refusing the line. */
+Node *parse_mode(TokenList tokens, bool interactive);
 
 /* ------------------------------------------------------------------ interp */
 
-void interpret(Node *program);
+void interpret(Node *program);      /* one whole program */
+
+/* The REPL keeps one set of globals alive across many entries. */
+void interp_init(void);
+void interp_run(Node *program);
+void interp_show_variables(void);
+
+void repl(void);
 
 #endif /* ADDA_H */

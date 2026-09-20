@@ -1,0 +1,7 @@
+2 + 2
+name = Rocco
+name
+print Hello {name}
+count = 5
+count + 1
+"count"

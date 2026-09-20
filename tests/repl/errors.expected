@@ -1,0 +1,16 @@
+typed:1: 'nope' is not defined
+     1 | print {nope}
+       | ^
+4
+typed:3: I cannot divide by zero
+     3 | x = 1 / 0
+       | ^
+typed:4: there is no open block for this 'end'
+     4 | end
+       | ^
+still here
+typed:7: I cannot divide by zero
+     7 |     return n / 0
+       |     ^
+after
+exit: 0
