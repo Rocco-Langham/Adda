@@ -32,6 +32,7 @@
 #include <commctrl.h>
 #include <dwmapi.h>
 #include <uxtheme.h>
+#include <shellapi.h>     /* SHFileOperation, so deleting goes to the bin */
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
@@ -43,8 +44,6 @@
 /* ── ids ─────────────────────────────────────────────────────────── */
 #define ID_CODE      1001
 #define ID_CONSOLE   1002
-#define ID_RUN       1003
-#define ID_STOP      1004
 #define ID_FIND      1005
 #define ID_FILES     1006
 #define ID_POLL      1           /* timer */
@@ -133,21 +132,24 @@ static Theme g_t;
 
 /* ── windows ─────────────────────────────────────────────────────── */
 static HWND  hwndMain;
-static HWND  hwndCode, hwndConsole, hwndRun, hwndStop;
+static HWND  hwndCode, hwndConsole;
 static HWND  hwndFind, hwndFiles;
 static HWND  hwndSettings, hwndCheats;
 static HWND  hwndCheatFind, hwndCheatList;
 
 static HBRUSH hBrushBg, hBrushSurface, hBrushAb;
 static HFONT  hFontMono, hFontUI, hFontUIBold, hFontSmall;
-static HWND   g_hotBtn;          /* owner-drawn button under the pointer */
 static int    g_dpi = 96;
 
 /* ── activity bar ────────────────────────────────────────────────── */
-enum { ICON_EXPLORER, ICON_SEARCH, ICON_CHEAT, ICON_GEAR };
-enum { AB_EXPLORER = 0, AB_SEARCH, AB_CHEAT, AB_GEAR, AB_COUNT };
+enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR };
+/* Run and Stop sit under Search; Cheat sheet and Settings are pinned to the
+ * bottom. Everything before AB_CHEAT stacks from the top. */
+enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHEAT, AB_GEAR, AB_COUNT };
 
-static const int AB_ICON[AB_COUNT] = { ICON_EXPLORER, ICON_SEARCH, ICON_CHEAT, ICON_GEAR };
+static const int AB_ICON[AB_COUNT] = {
+    ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR
+};
 
 static int  g_view = AB_EXPLORER;   /* which panel view, or -1 when collapsed */
 static int  g_abHot = -1;           /* activity item under the pointer */
@@ -178,6 +180,13 @@ typedef struct { char name[64]; char path[MAX_PATH]; } FileRow;
 static FileRow g_files[MAX_FILES];
 static int     g_fileCount;
 
+/* renaming happens in the list itself: an EDIT sits over the row */
+static HWND hwndRename;
+static int  g_renameIdx = -1;
+
+#define IDM_RENAME 3001
+#define IDM_DELETE 3002
+
 /* ── cheat sheet filtering ───────────────────────────────────────── */
 static int g_cheatShown[CHEAT_COUNT];
 static int g_cheatCount;
@@ -189,6 +198,7 @@ static void layout(HWND hwnd);
 static void open_settings(HWND owner);
 static void open_cheats(HWND owner);
 static void refresh_cheats(void);
+static void inq_clear(void);
 
 /* ════════════════════════════════════════════════════════ theme ══ */
 
@@ -408,6 +418,23 @@ static void icon_shape(HDC dc, int kind, int side, COLORREF fg, COLORREF bg)
         break;
     }
 
+    case ICON_PLAY: {
+        /* a play triangle, nudged right of centre so it looks centred -
+         * a triangle's visual weight sits towards its flat side */
+        POINT tri[3];
+        tri[0] = NP(30, 18, side);
+        tri[1] = NP(82, 50, side);
+        tri[2] = NP(30, 82, side);
+        Polygon(dc, tri, 3);
+        break;
+    }
+
+    case ICON_STOP: {
+        int a = MulDiv(24, side, 100), b = MulDiv(76, side, 100);
+        RoundRect(dc, a, a, b, b, side / 10, side / 10);
+        break;
+    }
+
     case ICON_CHEAT: {
         /* an open book: two leaves meeting at a spine */
         POINT left[4], right[4], spine[2];
@@ -600,7 +627,7 @@ static void console_output(const char *raw, int n)
 {
     char out[8192];
     char *pending;
-    int i, j = 0, caret = 0, len;
+    int i, j = 0, caret = 0, tail = 0, len;
     DWORD selStart = 0, selEnd = 0;
 
     for (i = 0; i < n && j < (int)sizeof(out) - 2; i++) {
@@ -615,7 +642,9 @@ static void console_output(const char *raw, int n)
     if (pending) {
         SendMessageA(hwndConsole, EM_GETSEL, (WPARAM)&selStart, (LPARAM)&selEnd);
         caret = (int)selStart - g_anchor;
+        tail  = (int)selEnd   - g_anchor;
         if (caret < 0) caret = 0;
+        if (tail < caret) tail = caret;
 
         len = console_len();
         SendMessageA(hwndConsole, EM_SETSEL, (WPARAM)g_anchor, (LPARAM)len);
@@ -627,8 +656,10 @@ static void console_output(const char *raw, int n)
 
     if (pending) {
         console_append(pending);
+        /* restore the whole selection, not just a caret: collapsing it would
+         * turn a pending overtype into an insert */
         SendMessageA(hwndConsole, EM_SETSEL,
-                     (WPARAM)(g_anchor + caret), (LPARAM)(g_anchor + caret));
+                     (WPARAM)(g_anchor + caret), (LPARAM)(g_anchor + tail));
         SendMessageA(hwndConsole, EM_SCROLLCARET, 0, 0);
         free(pending);
     }
@@ -637,8 +668,7 @@ static void console_output(const char *raw, int n)
 static void set_running(BOOL running)
 {
     g_running = running;
-    EnableWindow(hwndRun,  !running);
-    EnableWindow(hwndStop,  running);
+    /* Run and Stop live in the activity bar and dim by state */
     InvalidateRect(hwndMain, NULL, FALSE);
 }
 
@@ -674,6 +704,7 @@ static void finish_run(HWND hwnd, const char *note)
     close_handle(&g_in);
     close_handle(&g_out);
     close_handle(&g_err);
+    inq_clear();
 
     if (g_pi.hProcess) { CloseHandle(g_pi.hProcess); g_pi.hProcess = NULL; }
     if (g_pi.hThread)  { CloseHandle(g_pi.hThread);  g_pi.hThread  = NULL; }
@@ -681,6 +712,16 @@ static void finish_run(HWND hwnd, const char *note)
     if (g_tmp_file[0]) { remove(g_tmp_file); g_tmp_file[0] = '\0'; }
 
     set_running(FALSE);
+
+    /* Anything typed but never sent is not history. Left in place, the note
+     * would land after it and the transcript would read exactly like a line
+     * that had been submitted, when it never was. */
+    if (console_len() > g_anchor) {
+        SendMessageA(hwndConsole, EM_SETSEL,
+                     (WPARAM)g_anchor, (LPARAM)console_len());
+        SendMessageA(hwndConsole, EM_REPLACESEL, FALSE, (LPARAM)"");
+    }
+
     if (note) console_append(note);
     g_anchor = console_len();
     SetFocus(hwndCode);
@@ -726,8 +767,12 @@ static void run_code(HWND hwnd)
     SetHandleInformation(g_out, HANDLE_FLAG_INHERIT, 0);
     CreatePipe(&g_err, &hWriteErr, &sa, 0);
     SetHandleInformation(g_err, HANDLE_FLAG_INHERIT, 0);
-    CreatePipe(&hReadIn, &g_in, &sa, 0);
+    CreatePipe(&hReadIn, &g_in, &sa, 1 << 16);
     SetHandleInformation(g_in, HANDLE_FLAG_INHERIT, 0);
+    {   /* so a full pipe returns instead of parking the UI thread */
+        DWORD mode = PIPE_NOWAIT;
+        SetNamedPipeHandleState(g_in, &mode, NULL, NULL);
+    }
 
     ZeroMemory(&si, sizeof(si));
     si.cb         = sizeof(si);
@@ -770,12 +815,58 @@ static void run_code(HWND hwnd)
 }
 
 /* Sends everything typed after the anchor down the pipe. */
+/* Typed input is queued rather than written straight out.
+ *
+ * The obvious WriteFile-and-flush blocks the UI thread whenever the child is
+ * not reading - and FlushFileBuffers on a pipe does not return until the
+ * reader has drained it, so a program that never calls `ask` would freeze the
+ * window outright, Stop button included. The pipe is therefore non-blocking
+ * and anything it will not take waits here for the next timer tick. */
+static char  *g_inq;
+static size_t g_inq_len, g_inq_cap;
+
+static void inq_push(const char *data, size_t n)
+{
+    if (!n) return;
+    if (g_inq_len + n > g_inq_cap) {
+        size_t cap = g_inq_cap ? g_inq_cap : 256;
+        char *grown;
+        while (cap < g_inq_len + n) cap *= 2;
+        grown = (char *)realloc(g_inq, cap);
+        if (!grown) return;              /* drop it rather than die */
+        g_inq = grown;
+        g_inq_cap = cap;
+    }
+    memcpy(g_inq + g_inq_len, data, n);
+    g_inq_len += n;
+}
+
+static void inq_clear(void)
+{
+    free(g_inq);
+    g_inq = NULL;
+    g_inq_len = g_inq_cap = 0;
+}
+
+static void pump_stdin(void)
+{
+    DWORD written = 0;
+
+    if (!g_in || !g_inq_len) return;
+
+    if (!WriteFile(g_in, g_inq, (DWORD)g_inq_len, &written, NULL)) {
+        g_inq_len = 0;                   /* the child is gone */
+        return;
+    }
+    if (written >= g_inq_len) { g_inq_len = 0; return; }
+
+    memmove(g_inq, g_inq + written, g_inq_len - written);
+    g_inq_len -= written;
+}
+
 static void send_line(void)
 {
     char *line;
-    DWORD written;
-    size_t n;
-    char *with_nl;
 
     if (!g_running || !g_in) return;     /* before the alloc, or it leaks */
     line = console_pending();
@@ -783,15 +874,10 @@ static void send_line(void)
     console_append("\r\n");
     g_anchor = console_len();
 
-    n = line ? strlen(line) : 0;
-    with_nl = (char *)malloc(n + 2);
-    if (with_nl) {
-        if (n) memcpy(with_nl, line, n);
-        with_nl[n] = '\n';
-        WriteFile(g_in, with_nl, (DWORD)(n + 1), &written, NULL);
-        FlushFileBuffers(g_in);
-        free(with_nl);
-    }
+    if (line) inq_push(line, strlen(line));
+    inq_push("\n", 1);
+    pump_stdin();
+
     free(line);
 }
 
@@ -830,8 +916,11 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l,
         if (w == '\b') {
             DWORD a = 0, b = 0;
             SendMessageA(h, EM_GETSEL, (WPARAM)&a, (LPARAM)&b);
-            if (a == b && (int)a <= g_anchor) return 0;   /* nothing to eat */
-            if ((int)a < g_anchor)
+            /* EM_GETSEL normalises to a <= b, so testing the END covers both a
+             * bare caret at the anchor and a selection lying wholly in the
+             * history above it - either way there is nothing of ours to eat. */
+            if ((int)b <= g_anchor) return 0;
+            if ((int)a < g_anchor)                 /* straddles: keep our part */
                 SendMessageA(h, EM_SETSEL, (WPARAM)g_anchor, (LPARAM)b);
             break;
         }
@@ -850,7 +939,11 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l,
         if (w == VK_DELETE) {
             DWORD a = 0, b = 0;
             SendMessageA(h, EM_GETSEL, (WPARAM)&a, (LPARAM)&b);
-            if ((int)a < g_anchor) return 0;
+            if ((int)a < g_anchor) {
+                if ((int)b <= g_anchor) return 0;          /* all history */
+                /* straddles: delete only our part, same as backspace does */
+                SendMessageA(h, EM_SETSEL, (WPARAM)g_anchor, (LPARAM)b);
+            }
         }
         if (w == VK_ESCAPE) {              /* wipe the half-typed line */
             int end = console_len();
@@ -876,7 +969,10 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l,
         DWORD a = 0, b = 0;
         if (!g_running) return 0;
         SendMessageA(h, EM_GETSEL, (WPARAM)&a, (LPARAM)&b);
-        if ((int)a < g_anchor) return 0;
+        if ((int)a < g_anchor) {
+            if ((int)b <= g_anchor) return 0;              /* all history */
+            SendMessageA(h, EM_SETSEL, (WPARAM)g_anchor, (LPARAM)b);
+        }
         break;
     }
 
@@ -886,77 +982,6 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l,
     }
 
     return DefSubclassProc(h, msg, w, l);
-}
-
-/* ══════════════════════════════════════════════ owner-drawn ══ */
-
-static LRESULT CALLBACK btn_proc(HWND h, UINT msg, WPARAM w, LPARAM l,
-                                 UINT_PTR id, DWORD_PTR ref)
-{
-    (void)ref;
-
-    switch (msg) {
-    case WM_MOUSEMOVE:
-        if (g_hotBtn != h) {
-            TRACKMOUSEEVENT tme;
-            tme.cbSize = sizeof(tme);
-            tme.dwFlags = TME_LEAVE;
-            tme.hwndTrack = h;
-            tme.dwHoverTime = 0;
-            TrackMouseEvent(&tme);
-            g_hotBtn = h;
-            InvalidateRect(h, NULL, TRUE);
-        }
-        break;
-    case WM_MOUSELEAVE:
-        if (g_hotBtn == h) { g_hotBtn = NULL; InvalidateRect(h, NULL, TRUE); }
-        break;
-    case WM_NCDESTROY:
-        RemoveWindowSubclass(h, btn_proc, id);
-        break;
-    }
-    return DefSubclassProc(h, msg, w, l);
-}
-
-static void draw_button(DRAWITEMSTRUCT *di)
-{
-    RECT r = di->rcItem;
-    BOOL disabled = (di->itemState & ODS_DISABLED) != 0;
-    BOOL pressed  = (di->itemState & ODS_SELECTED) != 0;
-    BOOL hot      = (g_hotBtn == di->hwndItem) && !disabled;
-    BOOL primary  = (di->CtlID == ID_RUN);
-    COLORREF fill, ink, edge;
-    HBRUSH brush;
-    HPEN pen;
-    HGDIOBJ oldBrush, oldPen;
-    char label[64];
-
-    if (primary) {
-        fill = pressed ? g_t.accentDown : hot ? g_t.accentHot : g_t.accent;
-        ink  = g_t.onAccent;
-        edge = fill;
-        if (disabled) { fill = g_t.ghostHot; ink = g_t.muted; edge = g_t.border; }
-    } else {
-        fill = (pressed || hot) ? g_t.ghostHot : g_t.bg;
-        ink  = disabled ? g_t.muted : g_t.text;
-        edge = g_t.border;
-    }
-
-    fill_rect(di->hDC, r, g_t.bg);
-
-    brush = CreateSolidBrush(fill);
-    pen   = CreatePen(PS_SOLID, 1, edge);
-    oldBrush = SelectObject(di->hDC, brush);
-    oldPen   = SelectObject(di->hDC, pen);
-    RoundRect(di->hDC, r.left, r.top, r.right, r.bottom, S(6), S(6));
-    SelectObject(di->hDC, oldBrush);
-    SelectObject(di->hDC, oldPen);
-    DeleteObject(brush);
-    DeleteObject(pen);
-
-    GetWindowTextA(di->hwndItem, label, sizeof(label));
-    text_at(di->hDC, r, label, hFontUIBold, ink,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 /* ═══════════════════════════════════════════════ the explorer ══ */
@@ -1042,6 +1067,225 @@ static void open_file(int index)
     fclose(f);
 }
 
+/* ══════════════════════════════════════ renaming and deleting ══ */
+
+static void select_by_name(const char *name)
+{
+    int i;
+    for (i = 0; i < g_fileCount; i++)
+        if (strcmp(g_files[i].name, name) == 0) {
+            SendMessageA(hwndFiles, LB_SETCURSEL, (WPARAM)i, 0);
+            return;
+        }
+}
+
+/* Windows will not have these in a file name, and a path separator would let a
+ * rename walk out of the folder. */
+static BOOL name_is_sane(const char *s)
+{
+    const char *bad = "\\/:*?\"<>|";
+    if (!*s) return FALSE;
+    for (; *s; s++)
+        if (strchr(bad, *s)) return FALSE;
+    return TRUE;
+}
+
+static void end_rename(BOOL commit)
+{
+    int idx = g_renameIdx;
+    char typed[64], folder[MAX_PATH], target[MAX_PATH + 96];
+    const char *slash;
+
+    if (idx < 0) return;
+    g_renameIdx = -1;                  /* first, so hiding cannot re-enter */
+    if (hwndRename) ShowWindow(hwndRename, SW_HIDE);
+
+    if (!commit || idx >= g_fileCount) { SetFocus(hwndFiles); return; }
+
+    GetWindowTextA(hwndRename, typed, sizeof(typed));
+    if (!typed[0] || strcmp(typed, g_files[idx].name) == 0) {
+        SetFocus(hwndFiles);
+        return;
+    }
+    if (!name_is_sane(typed)) {
+        MessageBoxA(hwndMain,
+            "A file name cannot contain  \\ / : * ? \" < > |",
+            "Rename", MB_OK | MB_ICONWARNING);
+        SetFocus(hwndFiles);
+        return;
+    }
+
+    /* keep it findable: the Explorer only lists .adda files */
+    if (!strchr(typed, '.')) {
+        size_t n = strlen(typed);
+        if (n + 5 < sizeof(typed)) memcpy(typed + n, ".adda", 6);
+    }
+
+    snprintf(folder, sizeof(folder), "%s", g_files[idx].path);
+    slash = strrchr(folder, '\\');
+    if (slash) folder[slash - folder + 1] = '\0';
+    else folder[0] = '\0';
+
+    snprintf(target, sizeof(target), "%s%s", folder, typed);
+
+    if (GetFileAttributesA(target) != INVALID_FILE_ATTRIBUTES) {
+        MessageBoxA(hwndMain, "There is already a file with that name.",
+                    "Rename", MB_OK | MB_ICONWARNING);
+        SetFocus(hwndFiles);
+        return;
+    }
+
+    if (!MoveFileA(g_files[idx].path, target)) {
+        MessageBoxA(hwndMain,
+            "Windows would not rename that file.\n"
+            "It may be open in another program, or read-only.",
+            "Rename", MB_OK | MB_ICONWARNING);
+        SetFocus(hwndFiles);
+        return;
+    }
+
+    rescan_files();
+    select_by_name(typed);
+    SetFocus(hwndFiles);
+}
+
+static LRESULT CALLBACK rename_proc(HWND h, UINT msg, WPARAM w, LPARAM l,
+                                    UINT_PTR id, DWORD_PTR ref)
+{
+    (void)ref;
+
+    switch (msg) {
+    case WM_KEYDOWN:
+        if (w == VK_RETURN) { end_rename(TRUE);  return 0; }
+        if (w == VK_ESCAPE) { end_rename(FALSE); return 0; }
+        break;
+    case WM_CHAR:
+        if (w == '\r' || w == '\n' || w == 0x1B) return 0;  /* no beep */
+        break;
+    case WM_KILLFOCUS:
+        /* clicking away abandons the rename rather than silently doing it */
+        end_rename(FALSE);
+        break;
+    case WM_NCDESTROY:
+        RemoveWindowSubclass(h, rename_proc, id);
+        break;
+    }
+    return DefSubclassProc(h, msg, w, l);
+}
+
+static void begin_rename(void)
+{
+    int sel = (int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0);
+    RECT r;
+
+    if (sel < 0 || sel >= g_fileCount) return;
+    if (SendMessageA(hwndFiles, LB_GETITEMRECT, (WPARAM)sel, (LPARAM)&r) == LB_ERR)
+        return;
+
+    /* A child of the main window rather than of the list, so that
+     * WM_CTLCOLOREDIT reaches our handler and the box follows the theme. */
+    MapWindowPoints(hwndFiles, hwndMain, (POINT *)&r, 2);
+
+    if (!hwndRename) {
+        hwndRename = CreateWindowExA(0, "EDIT", "",
+            WS_CHILD | ES_AUTOHSCROLL,
+            0, 0, 0, 0, hwndMain, NULL, GetModuleHandleA(NULL), NULL);
+        if (!hwndRename) return;
+        SetWindowSubclass(hwndRename, rename_proc, 1, 0);
+    }
+
+    SendMessage(hwndRename, WM_SETFONT, (WPARAM)hFontUI, TRUE);
+    MoveWindow(hwndRename, r.left, r.top,
+               r.right - r.left, r.bottom - r.top, TRUE);
+    SetWindowTextA(hwndRename, g_files[sel].name);
+
+    g_renameIdx = sel;
+    SetWindowPos(hwndRename, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetFocus(hwndRename);
+    SendMessageA(hwndRename, EM_SETSEL, 0, (LPARAM)-1);
+}
+
+static void delete_selected(void)
+{
+    int sel = (int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0);
+    char question[MAX_PATH + 128];
+    char from[MAX_PATH + 2];
+    SHFILEOPSTRUCTA op;
+
+    if (sel < 0 || sel >= g_fileCount) return;
+
+    snprintf(question, sizeof(question),
+             "Delete %s?\n\nIt goes to the Recycle Bin, so you can get it back.",
+             g_files[sel].name);
+    if (MessageBoxA(hwndMain, question, "Delete",
+                    MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
+        return;
+
+    /* pFrom is a list, so it has to end with TWO NULs */
+    memset(from, 0, sizeof(from));
+    snprintf(from, MAX_PATH, "%s", g_files[sel].path);
+
+    memset(&op, 0, sizeof(op));
+    op.hwnd   = hwndMain;
+    op.wFunc  = FO_DELETE;
+    op.pFrom  = from;
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+
+    if (SHFileOperationA(&op) != 0 || op.fAnyOperationsAborted) {
+        MessageBoxA(hwndMain,
+            "Windows would not delete that file.\n"
+            "It may be open in another program, or read-only.",
+            "Delete", MB_OK | MB_ICONWARNING);
+    }
+
+    rescan_files();
+    if (g_fileCount) {
+        int next = sel < g_fileCount ? sel : g_fileCount - 1;
+        SendMessageA(hwndFiles, LB_SETCURSEL, (WPARAM)next, 0);
+    }
+    SetFocus(hwndFiles);
+}
+
+static void file_menu(HWND hwnd, int sx, int sy)
+{
+    HMENU menu;
+    int chosen;
+
+    if (sx == -1 && sy == -1) {        /* came from the keyboard */
+        RECT r;
+        int sel = (int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0);
+        if (sel < 0) return;
+        SendMessageA(hwndFiles, LB_GETITEMRECT, (WPARAM)sel, (LPARAM)&r);
+        MapWindowPoints(hwndFiles, NULL, (POINT *)&r, 2);
+        sx = r.left + S(20);
+        sy = r.bottom;
+    } else {
+        POINT p;
+        DWORD hit;
+        p.x = sx; p.y = sy;
+        ScreenToClient(hwndFiles, &p);
+        hit = (DWORD)SendMessageA(hwndFiles, LB_ITEMFROMPOINT, 0,
+                                  MAKELPARAM(p.x, p.y));
+        if (HIWORD(hit)) return;       /* clicked past the last row */
+        SendMessageA(hwndFiles, LB_SETCURSEL, (WPARAM)LOWORD(hit), 0);
+    }
+
+    if ((int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0) < 0) return;
+
+    menu = CreatePopupMenu();
+    AppendMenuA(menu, MF_STRING, IDM_RENAME, "Rename\tF2");
+    AppendMenuA(menu, MF_STRING, IDM_DELETE, "Delete\tDel");
+
+    chosen = (int)TrackPopupMenu(menu,
+                 TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                 sx, sy, 0, hwnd, NULL);
+    DestroyMenu(menu);
+
+    if (chosen == IDM_RENAME) begin_rename();
+    else if (chosen == IDM_DELETE) delete_selected();
+}
+
 /* ═══════════════════════════════════════════════════ searching ══ */
 
 static BOOL starts_with_ci(const char *s, const char *needle, int n)
@@ -1121,7 +1365,7 @@ static void layout(HWND hwnd)
     abW    = S(48);
     panelW = (g_view >= 0) ? S(210) : 0;
     pad    = S(12);
-    toolH  = S(46);
+    toolH  = S(12);   /* just padding now Run and Stop live in the bar */
     splitH = S(7);
 
     /* activity bar slots */
@@ -1131,7 +1375,7 @@ static void layout(HWND hwnd)
         RECT *r = &g_abRect[i];
         r->left = 0;
         r->right = abW;
-        if (i < AB_CHEAT) { r->top = top; top += S(44); }
+        if (i < AB_CHEAT) { r->top = top; top += S(44) + (i == AB_SEARCH ? S(6) : 0); }
         else              { r->top = bottom; bottom += S(44); }
         r->bottom = r->top + S(44);
     }
@@ -1191,8 +1435,6 @@ static void layout(HWND hwnd)
         ShowWindow(hwndFind, SW_HIDE);
     }
 
-    dwp = move_child(dwp, hwndRun,  x + pad, S(8), S(84), S(30), 0);
-    dwp = move_child(dwp, hwndStop, x + pad + S(92), S(8), S(84), S(30), 0);
     dwp = move_child(dwp, hwndCode, x + pad, y,
                      w - pad * 2, codeH - S(6), 0);
     dwp = move_child(dwp, hwndConsole, x + pad, y + codeH + splitH,
@@ -1230,9 +1472,25 @@ static void paint_main(HWND hwnd, HDC hdc)
         RECT box = g_abRect[i];
         RECT icon;
         BOOL active = (i == g_view);
-        BOOL hot = (g_abHot == i);
+        /* Run only makes sense while idle, Stop only while running */
+        BOOL disabled = (i == AB_RUN && g_running) || (i == AB_STOP && !g_running);
+        BOOL hot = (g_abHot == i) && !disabled;
         COLORREF cell = hot ? g_t.abHover : g_t.abBg;
         COLORREF fg = (active || hot) ? g_t.abIcon : g_t.abIconDim;
+
+        if (disabled)                    /* halfway between dim and the bar */
+            fg = RGB((GetRValue(g_t.abIconDim) + GetRValue(g_t.abBg)) / 2,
+                     (GetGValue(g_t.abIconDim) + GetGValue(g_t.abBg)) / 2,
+                     (GetBValue(g_t.abIconDim) + GetBValue(g_t.abBg)) / 2);
+        else if (i == AB_STOP)           /* something is running: make it obvious */
+            fg = g_t.abIcon;
+
+        if (i == AB_RUN) {               /* a hairline between views and actions */
+            RECT sep = box;
+            sep.left += S(12); sep.right -= S(12);
+            sep.top -= S(3); sep.bottom = sep.top + 1;
+            fill_rect(hdc, sep, g_t.abIconDim);
+        }
 
         if (hot) fill_rect(hdc, box, cell);
 
@@ -1760,6 +2018,15 @@ static void ab_click(HWND hwnd, int item)
         InvalidateRect(hwnd, NULL, TRUE);
         if (g_view == AB_SEARCH) SetFocus(hwndFind);
         break;
+    case AB_RUN:
+        if (!g_running) run_code(hwnd);
+        break;
+    case AB_STOP:
+        if (g_running) {
+            TerminateProcess(g_pi.hProcess, 1);
+            finish_run(hwnd, "\r\n[stopped]\r\n");
+        }
+        break;
     case AB_CHEAT:
         open_cheats(hwnd);
         break;
@@ -1800,14 +2067,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             ES_MULTILINE | ES_AUTOVSCROLL,
             0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)ID_CONSOLE, inst, NULL);
 
-        hwndRun = CreateWindowExA(0, "BUTTON", "Run",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-            0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)ID_RUN, inst, NULL);
-
-        hwndStop = CreateWindowExA(0, "BUTTON", "Stop",
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED,
-            0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)ID_STOP, inst, NULL);
-
         /* no WS_BORDER: the system frame ignores the palette, so paint_main
          * draws one in the theme colour instead */
         hwndFind = CreateWindowExA(0, "EDIT", "",
@@ -1820,8 +2079,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         SendMessage(hwndCode,    WM_SETFONT, (WPARAM)hFontMono, TRUE);
         SendMessage(hwndConsole, WM_SETFONT, (WPARAM)hFontMono, TRUE);
-        SendMessage(hwndRun,     WM_SETFONT, (WPARAM)hFontUIBold, TRUE);
-        SendMessage(hwndStop,    WM_SETFONT, (WPARAM)hFontUIBold, TRUE);
         SendMessage(hwndFind,    WM_SETFONT, (WPARAM)hFontUI, TRUE);
         SendMessage(hwndFiles,   WM_SETFONT, (WPARAM)hFontUI, TRUE);
 
@@ -1829,8 +2086,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SendMessageA(hwndConsole, EM_SETLIMITTEXT, 0, 0);
         SendMessageA(hwndCode,    EM_SETLIMITTEXT, 0, 0);
 
-        SetWindowSubclass(hwndRun,     btn_proc, ID_RUN, 0);
-        SetWindowSubclass(hwndStop,    btn_proc, ID_STOP, 0);
         SetWindowSubclass(hwndConsole, console_proc, ID_CONSOLE, 0);
 
         apply_titlebar(hwnd);
@@ -1882,10 +2137,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
     }
 
-    case WM_DRAWITEM:
-        draw_button((DRAWITEMSTRUCT *)lParam);
-        return TRUE;
-
     /* ── activity bar and splitter mousing ───────────────────────── */
     case WM_MOUSEMOVE: {
         POINT p;
@@ -1897,7 +2148,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         if (g_dragging) {
             RECT rc;
-            int toolH = S(46), splitH = S(7), track, codeH, minPane = S(60);
+            int toolH = S(12), splitH = S(7), track, codeH, minPane = S(60);
             GetClientRect(hwnd, &rc);
             track = rc.bottom - toolH - splitH;
             if (track >= 2 * minPane) {
@@ -1932,6 +2183,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_MOUSELEAVE:
         if (g_abHot != -1) { g_abHot = -1; InvalidateRect(hwnd, NULL, FALSE); }
         return 0;
+
+    case WM_CONTEXTMENU:
+        if ((HWND)wParam == hwndFiles) {
+            file_menu(hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            return 0;
+        }
+        break;
 
     case WM_SETCURSOR: {
         POINT p;
@@ -2007,6 +2265,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     /* ── output while the program runs ───────────────────────────── */
     case WM_TIMER:
         if (wParam == ID_POLL && g_running) {
+            pump_stdin();          /* whatever the pipe would not take last time */
             drain(g_out);
             drain(g_err);
             if (WaitForSingleObject(g_pi.hProcess, 0) == WAIT_OBJECT_0)
@@ -2025,8 +2284,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         build_fonts();
         SendMessage(hwndCode,    WM_SETFONT, (WPARAM)hFontMono, TRUE);
         SendMessage(hwndConsole, WM_SETFONT, (WPARAM)hFontMono, TRUE);
-        SendMessage(hwndRun,     WM_SETFONT, (WPARAM)hFontUIBold, TRUE);
-        SendMessage(hwndStop,    WM_SETFONT, (WPARAM)hFontUIBold, TRUE);
         SendMessage(hwndFind,    WM_SETFONT, (WPARAM)hFontUI, TRUE);
         SendMessage(hwndFiles,   WM_SETFONT, (WPARAM)hFontUI, TRUE);
         SetWindowPos(hwnd, NULL, r->left, r->top,
@@ -2039,13 +2296,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
-        case ID_RUN:  run_code(hwnd); return 0;
-        case ID_STOP:
-            if (g_running) {
-                TerminateProcess(g_pi.hProcess, 1);
-                finish_run(hwnd, "\r\n[stopped]\r\n");
-            }
-            return 0;
         case ID_FILES:
             /* selection change alone - LBN_DBLCLK would load it a second time */
             if (HIWORD(wParam) == LBN_SELCHANGE)
@@ -2149,6 +2399,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
             (msg.hwnd == hwndCheatFind || msg.hwnd == hwndCheatList)) {
             insert_cheat((int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0));
             continue;
+        }
+        /* F2 and Delete act on the file list */
+        if (msg.message == WM_KEYDOWN && msg.hwnd == hwndFiles) {
+            if (msg.wParam == VK_F2)     { begin_rename();     continue; }
+            if (msg.wParam == VK_DELETE) { delete_selected();   continue; }
         }
         /* Enter in the search box jumps to the next match */
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN &&

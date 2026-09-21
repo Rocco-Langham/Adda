@@ -52,6 +52,6 @@ if [ "$(uname -o 2>/dev/null)" = "Msys" ] || [ "$OS" = "Windows_NT" ]; then
     "${WINDRES:-windres}" -I src src/adda-gui.rc -o adda-gui-res.o
     "$CC" $WARN $DEFS $FLAGS -mwindows -o adda-gui \
         src/gui.c adda-gui-res.o \
-        -lcomctl32 -ldwmapi -luxtheme -lgdi32
+        -lcomctl32 -ldwmapi -luxtheme -lgdi32 -lshell32
     echo "built ./adda-gui ($MODE)"
 fi
