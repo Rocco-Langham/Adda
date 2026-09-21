@@ -262,6 +262,12 @@ static void apply_titlebar(HWND hwnd)
     if (!hwnd) return;
     if (FAILED(DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark))))
         DwmSetWindowAttribute(hwnd, 19, &dark, sizeof(dark));
+    {
+        /* DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND. Windows 11 only;
+         * older versions just say no and keep square corners. */
+        DWORD corner = 2;
+        DwmSetWindowAttribute(hwnd, 33, &corner, sizeof(corner));
+    }
 }
 
 static void theme_edit(HWND h)
@@ -516,11 +522,40 @@ static void fill_rect(HDC hdc, RECT r, COLORREF c)
     DeleteObject(b);
 }
 
-static void frame_rect(HDC hdc, RECT r, COLORREF c)
+/* Rounded versions. GDI's RoundRect takes the full ellipse size, so the
+ * corner radius is half of what gets passed. */
+#define RADIUS      S(8)
+#define RADIUS_BIG  S(12)
+
+static void round_fill(HDC hdc, RECT r, COLORREF c, int radius)
 {
     HBRUSH b = CreateSolidBrush(c);
-    FrameRect(hdc, &r, b);
-    DeleteObject(b);
+    HPEN p = CreatePen(PS_SOLID, 1, c);
+    HGDIOBJ ob = SelectObject(hdc, b), op = SelectObject(hdc, p);
+    RoundRect(hdc, r.left, r.top, r.right, r.bottom, radius * 2, radius * 2);
+    SelectObject(hdc, ob); SelectObject(hdc, op);
+    DeleteObject(b); DeleteObject(p);
+}
+
+static void round_frame(HDC hdc, RECT r, COLORREF c, int radius)
+{
+    HPEN p = CreatePen(PS_SOLID, 1, c);
+    HGDIOBJ ob = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    HGDIOBJ op = SelectObject(hdc, p);
+    RoundRect(hdc, r.left, r.top, r.right, r.bottom, radius * 2, radius * 2);
+    SelectObject(hdc, ob); SelectObject(hdc, op);
+    DeleteObject(p);
+}
+
+/* Clip a child control to a rounded shape so its square corners don't poke
+ * out past the rounded outline paint_main draws around it. */
+static void round_child(HWND h, int radius)
+{
+    RECT r;
+    if (!h) return;
+    GetClientRect(h, &r);
+    SetWindowRgn(h, CreateRoundRectRgn(0, 0, r.right + 1, r.bottom + 1,
+                                       radius * 2, radius * 2), TRUE);
 }
 
 static void text_at(HDC hdc, RECT r, const char *s, HFONT font,
@@ -1442,6 +1477,11 @@ static void layout(HWND hwnd)
 
     if (dwp) EndDeferWindowPos(dwp);
 
+    round_child(hwndCode, RADIUS_BIG - 1);
+    round_child(hwndConsole, RADIUS_BIG - 1);
+    round_child(hwndFind, RADIUS - 1);
+    round_child(hwndFiles, RADIUS - 1);
+
     {
         RECT r;
         GetClientRect(hwndCode, &r);
@@ -1492,12 +1532,18 @@ static void paint_main(HWND hwnd, HDC hdc)
             fill_rect(hdc, sep, g_t.abIconDim);
         }
 
-        if (hot) fill_rect(hdc, box, cell);
+        if (hot) {
+            RECT pill = box;
+            InflateRect(&pill, -S(5), -S(3));
+            round_fill(hdc, pill, cell, RADIUS);
+        }
 
         if (active) {
             RECT bar = box;
-            bar.right = bar.left + S(2);
-            fill_rect(hdc, bar, g_t.abIcon);
+            bar.left += S(1);
+            bar.right = bar.left + S(3);
+            InflateRect(&bar, 0, -S(8));
+            round_fill(hdc, bar, g_t.abIcon, S(2));
         }
 
         icon = box;
@@ -1530,7 +1576,7 @@ static void paint_main(HWND hwnd, HDC hdc)
             GetWindowRect(hwndFind, &fr);
             MapWindowPoints(NULL, hwnd, (POINT *)&fr, 2);
             InflateRect(&fr, 1, 1);
-            frame_rect(hdc, fr, g_t.border);
+            round_frame(hdc, fr, g_t.border, RADIUS);
         }
     }
 
@@ -1552,12 +1598,12 @@ static void paint_main(HWND hwnd, HDC hdc)
         GetWindowRect(hwndCode, &cr);
         MapWindowPoints(NULL, hwnd, (POINT *)&cr, 2);
         InflateRect(&cr, 1, 1);
-        frame_rect(hdc, cr, g_t.border);
+        round_frame(hdc, cr, g_t.border, RADIUS_BIG);
 
         GetWindowRect(hwndConsole, &cr);
         MapWindowPoints(NULL, hwnd, (POINT *)&cr, 2);
         InflateRect(&cr, 1, 1);
-        frame_rect(hdc, cr, g_t.border);
+        round_frame(hdc, cr, g_t.border, RADIUS_BIG);
     }
 
     /* a word about what the console is for */
@@ -1598,8 +1644,9 @@ static void settings_paint(HWND hwnd, HDC hdc)
     item = nav;
     item.left  += S(10);
     item.top   += S(16);
+    item.right -= S(10);
     item.bottom = item.top + S(28);
-    fill_rect(hdc, item, g_t.sel);
+    round_fill(hdc, item, g_t.sel, RADIUS);
     {
         RECT label = item;
         label.left += S(10);
@@ -1631,8 +1678,8 @@ static void settings_paint(HWND hwnd, HDC hdc)
         row.top = y;
         row.bottom = y + S(52);
 
-        if (i == g_pick)        fill_rect(hdc, row, g_t.sel);
-        else if (i == g_setRowHot) fill_rect(hdc, row, g_t.ghostHot);
+        if (i == g_pick)           round_fill(hdc, row, g_t.sel, RADIUS_BIG);
+        else if (i == g_setRowHot) round_fill(hdc, row, g_t.ghostHot, RADIUS_BIG);
 
         /* three chips that say what the theme looks like */
         chips[0] = t.abBg;
@@ -1643,8 +1690,8 @@ static void settings_paint(HWND hwnd, HDC hdc)
             sw.right = sw.left + S(14);
             sw.top = row.top + S(18);
             sw.bottom = sw.top + S(16);
-            fill_rect(hdc, sw, chips[j]);
-            frame_rect(hdc, sw, g_t.border);
+            round_fill(hdc, sw, chips[j], S(4));
+            round_frame(hdc, sw, g_t.border, S(4));
         }
 
         label = row;
@@ -1828,7 +1875,12 @@ static void draw_cheat_item(DRAWITEMSTRUCT *di)
     }
     c = &CHEATS[g_cheatShown[di->itemID]];
 
-    fill_rect(di->hDC, r, selected ? g_t.sel : g_t.surface);
+    fill_rect(di->hDC, r, g_t.surface);
+    if (selected) {
+        RECT pill = r;
+        InflateRect(&pill, -S(6), -S(2));
+        round_fill(di->hDC, pill, g_t.sel, RADIUS);
+    }
 
     line = r;
     line.left += S(12);
