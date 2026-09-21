@@ -262,6 +262,7 @@ static void open_cheats(void);
 static void refresh_cheats(void);
 static void insert_cheat(NSInteger shownIndex);
 static void run_code(void);
+static void save_current(void);
 static void check_code(void);
 static void new_project(void);
 static void clear_check(void);
@@ -912,6 +913,7 @@ static void run_code(void)
     int err;
 
     if (g_running) return;
+    save_current();                 /* a run is a good moment to keep your work */
 
     g_tmpFile = [dir stringByAppendingPathComponent:name];
     if (![g_code.string writeToFile:g_tmpFile atomically:NO
@@ -1096,6 +1098,30 @@ static void rescan_files(void)
     g_quiet = NO;
 }
 
+/* Each file is its own document: the editor holds whichever one is open, and
+ * what is typed goes back into that file - when another is opened, before a
+ * run, and on quitting - so typing in one never turns up in another. */
+static NSString *g_curPath;           /* the file in the editor, or nil */
+static BOOL      g_dirty;             /* typed in since it was loaded or saved */
+
+static void save_current(void)
+{
+    if (!g_curPath || !g_dirty) return;
+    if ([g_code.string writeToFile:g_curPath atomically:YES
+                          encoding:NSUTF8StringEncoding error:NULL])
+        g_dirty = NO;
+    else
+        warn([NSString stringWithFormat:@"Your changes to %@ could not be saved.\n"
+                                        @"It may be locked, or in a folder you cannot change.",
+                                        g_curPath.lastPathComponent]);
+}
+
+static void show_current(void)
+{
+    g_win.title = g_curPath ? [NSString stringWithFormat:@"%@ - Adda", g_curPath.lastPathComponent]
+                            : @"Adda";
+}
+
 static void open_file(NSString *path)
 {
     NSData *data;
@@ -1104,6 +1130,8 @@ static void open_file(NSString *path)
 
     if (!path) return;
     if ([NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDir] && isDir) return;
+    if (g_curPath && [path isEqualToString:g_curPath]) return;   /* already open */
+    save_current();
 
     data = [NSData dataWithContentsOfFile:path];
     if (!data) return;
@@ -1111,6 +1139,9 @@ static void open_file(NSString *path)
     if (!text) text = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
 
     g_code.string = text;
+    g_curPath = path;
+    g_dirty = NO;
+    show_current();
     g_codeScroll.verticalRulerView.needsDisplay = YES;
     clear_check();
     style_text(g_code);
@@ -1200,6 +1231,13 @@ static void end_rename(NSString *from, NSString *typed)
         return;
     }
 
+    /* the open file moves with it, or with the folder it is in */
+    if (g_curPath && [g_curPath isEqualToString:from])
+        g_curPath = target;
+    else if (g_curPath && [g_curPath hasPrefix:[from stringByAppendingString:@"/"]])
+        g_curPath = [target stringByAppendingString:[g_curPath substringFromIndex:from.length]];
+    show_current();
+
     rescan_files();
     reveal(target);
     select_by_path(target);
@@ -1274,6 +1312,14 @@ static void delete_file(NSInteger row)
     a.buttons[0].hasDestructiveAction = YES;
     a.buttons[1].keyEquivalent = @"\r";
     if ([a runModal] != NSAlertFirstButtonReturn) return;
+
+    /* the open file is going: it must not be written back afterwards */
+    if (g_curPath && ([g_curPath isEqualToString:path] ||
+                      [g_curPath hasPrefix:[path stringByAppendingString:@"/"]])) {
+        g_curPath = nil;
+        g_dirty = NO;
+        show_current();
+    }
 
     if (![NSFileManager.defaultManager trashItemAtURL:[NSURL fileURLWithPath:path]
                                      resultingItemURL:nil error:NULL])
@@ -1397,6 +1443,9 @@ static void save_as(void)
                  @"It may be locked, or in a folder you cannot change.");
             return;
         }
+        g_curPath = panel.URL.path;  /* what you type now goes into the saved file */
+        g_dirty = NO;
+        show_current();
         rescan_files();              /* it may have landed in the Explorer */
         reveal(panel.URL.path);
         select_by_path(panel.URL.path);
@@ -2099,6 +2148,7 @@ static void build_window(void)
                     usingBlock:^(NSNotification *n) {
                         (void)n;
                         ln.needsDisplay = YES;
+                        g_dirty = YES;       /* belongs to the open file now */
                         clear_check();       /* the marks no longer line up */
                     }];
     }
@@ -2919,6 +2969,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
 - (void)applicationWillTerminate:(NSNotification *)n
 {
     (void)n;
+    save_current();
     stop_code();
 }
 

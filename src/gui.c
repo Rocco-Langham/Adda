@@ -227,6 +227,7 @@ static void layout(HWND hwnd);
 static void open_settings(HWND owner);
 static void open_cheats(HWND owner);
 static void refresh_cheats(void);
+static void save_current(void);
 static void inq_clear(void);
 
 /* ════════════════════════════════════════════════════════ theme ══ */
@@ -907,6 +908,7 @@ static void run_code(HWND hwnd)
     BOOL ok;
 
     if (g_running) return;
+    save_current();                 /* a run is a good moment to keep your work */
 
     len = GetWindowTextLengthA(hwndCode);
     code = (char *)malloc((size_t)len + 2);
@@ -1206,6 +1208,57 @@ fill:
         SendMessageA(hwndFiles, LB_ADDSTRING, 0, (LPARAM)g_files[i].name);
 }
 
+/* Each file is its own document: the editor holds whichever one is open, and
+ * what is typed goes back into that file - when another is opened, before a
+ * run, and on closing - so typing in one never turns up in another. */
+static char g_curPath[MAX_PATH * 3];  /* the file in the editor, or "" */
+static BOOL g_dirty;                  /* typed in since it was loaded or saved */
+static BOOL g_loading;                /* the EN_CHANGE is ours, not typing */
+
+/* the code box's text with the EDIT control's \r\n put back to \n; caller frees */
+static char *code_text(int *outLen)
+{
+    int len = GetWindowTextLengthA(hwndCode), i, j;
+    char *text = malloc((size_t)len + 1);
+    if (!text) return NULL;
+    GetWindowTextA(hwndCode, text, len + 1);
+    for (i = j = 0; i < len; i++)
+        if (!(text[i] == '\r' && text[i + 1] == '\n')) text[j++] = text[i];
+    text[j] = '\0';
+    *outLen = j;
+    return text;
+}
+
+static void show_current(void)
+{
+    char title[MAX_PATH + 16];
+    const char *name = strrchr(g_curPath, '\\');
+    name = name ? name + 1 : g_curPath;
+    if (g_curPath[0]) snprintf(title, sizeof title, "%s - Adda", name);
+    else snprintf(title, sizeof title, "Adda");
+    SetWindowTextA(hwndMain, title);
+}
+
+static void save_current(void)
+{
+    int len;
+    char *text;
+    FILE *f;
+    BOOL ok;
+
+    if (!g_curPath[0] || !g_dirty) return;
+    text = code_text(&len);
+    if (!text) return;
+    f = fopen(g_curPath, "wb");
+    ok = f && fwrite(text, 1, (size_t)len, f) == (size_t)len;
+    if (f && fclose(f) != 0) ok = FALSE;
+    free(text);
+    if (ok) g_dirty = FALSE;
+    else MessageBoxA(hwndMain, "Your changes could not be saved.\n"
+                               "The file may be read-only, or open in another program.",
+                     "Save", MB_OK | MB_ICONWARNING);
+}
+
 static void open_file(int index)
 {
     FILE *f;
@@ -1213,6 +1266,8 @@ static void open_file(int index)
     char *buf;
 
     if (index < 0 || index >= g_fileCount) return;
+    if (strcmp(g_files[index].path, g_curPath) == 0) return;   /* already open */
+    save_current();
 
     f = fopen(g_files[index].path, "rb");
     if (!f) return;
@@ -1233,7 +1288,12 @@ static void open_file(int index)
                 buf[j++] = raw[i];
             }
             buf[j] = '\0';
+            g_loading = TRUE;
             SetWindowTextA(hwndCode, buf);
+            g_loading = FALSE;
+            snprintf(g_curPath, sizeof g_curPath, "%s", g_files[index].path);
+            g_dirty = FALSE;
+            show_current();
             free(raw);
         }
         free(buf);
@@ -1317,6 +1377,10 @@ static void end_rename(BOOL commit)
         SetFocus(hwndFiles);
         return;
     }
+    if (strcmp(g_files[idx].path, g_curPath) == 0) {   /* the open file moves with it */
+        snprintf(g_curPath, sizeof g_curPath, "%s", target);
+        show_current();
+    }
 
     rescan_files();
     select_by_name(typed);
@@ -1395,6 +1459,13 @@ static void delete_selected(void)
     if (MessageBoxA(hwndMain, question, "Delete",
                     MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
         return;
+
+    /* the open file is going: it must not be written back afterwards */
+    if (strcmp(g_files[sel].path, g_curPath) == 0) {
+        g_curPath[0] = '\0';
+        g_dirty = FALSE;
+        show_current();
+    }
 
     /* pFrom is a list, so it has to end with TWO NULs */
     memset(from, 0, sizeof(from));
@@ -2628,6 +2699,11 @@ static void save_as(HWND hwnd)
                           "It may be read-only, or in a folder you cannot change.",
                     "Save", MB_OK | MB_ICONWARNING);
     }
+    else {                           /* what you type now goes into the saved file */
+        snprintf(g_curPath, sizeof g_curPath, "%s", path);
+        g_dirty = FALSE;
+        show_current();
+    }
     if (f) fclose(f);
     free(text);
     rescan_files();                  /* it may have landed in the Explorer */
@@ -3255,6 +3331,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         case ID_CODE:
             /* a new or removed line renumbers everything below it */
+            if (HIWORD(wParam) == EN_CHANGE && !g_loading)
+                g_dirty = TRUE;              /* belongs to the open file now */
             if (HIWORD(wParam) == EN_CHANGE && g_chkCount) {
                 g_chkCount = 0;              /* the marks no longer line up */
                 InvalidateRect(hwndCode, NULL, FALSE);
@@ -3280,6 +3358,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
 
     case WM_DESTROY:
+        save_current();
         if (g_running) {
             TerminateProcess(g_pi.hProcess, 1);
             finish_run(hwnd, NULL);
