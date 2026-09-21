@@ -173,6 +173,15 @@ static int   g_barHot = -1;
 static int   g_barPress = -1;
 static DWORD g_barPressAt;
 
+/* Hover: each button's highlight fades in and out over HOVER_MS rather than
+ * snapping. 0 is untouched, 1 fully lit; the ID_ANIM timer walks each one
+ * toward where the pointer says it should be. */
+#define HOVER_MS  120
+static double g_abGlow[AB_COUNT];
+static double g_barGlow[BAR_COUNT];
+static BOOL   g_animOn;             /* main window's ID_ANIM is running    */
+static DWORD  g_animTick;
+
 /* ── panes ───────────────────────────────────────────────────────── */
 static double g_split = 0.52;       /* share of the editor area given to code */
 static BOOL   g_dragging = FALSE;
@@ -613,6 +622,15 @@ static COLORREF blend(COLORREF a, COLORREF b, double t)
     return RGB((int)(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * t),
                (int)(GetGValue(a) + (GetGValue(b) - GetGValue(a)) * t),
                (int)(GetBValue(a) + (GetBValue(b) - GetBValue(a)) * t));
+}
+
+/* moves one glow toward its target; TRUE while it still has somewhere to go */
+static BOOL approach(double *g, BOOL on, double step)
+{
+    double to = on ? 1 : 0;
+    if (*g < to) { *g += step; if (*g > to) *g = to; }
+    else if (*g > to) { *g -= step; if (*g < to) *g = to; }
+    return *g != to;
 }
 
 /* 1 at the moment of the click, easing to 0 as it finishes */
@@ -1668,9 +1686,9 @@ static void paint_main(HWND hwnd, HDC hdc)
         BOOL active = (i == g_view);
         /* Run only makes sense while idle, Stop only while running */
         BOOL disabled = (i == AB_RUN && g_running) || (i == AB_STOP && !g_running);
-        BOOL hot = (g_abHot == i) && !disabled;
-        COLORREF cell = hot ? g_t.abHover : g_t.abBg;
-        COLORREF fg = (active || hot) ? g_t.abIcon : g_t.abIconDim;
+        double glow = disabled ? 0 : g_abGlow[i];
+        COLORREF cell = blend(g_t.abBg, g_t.abHover, glow);
+        COLORREF fg = active ? g_t.abIcon : blend(g_t.abIconDim, g_t.abIcon, glow);
 
         if (disabled)                    /* halfway between dim and the bar */
             fg = RGB((GetRValue(g_t.abIconDim) + GetRValue(g_t.abBg)) / 2,
@@ -1690,12 +1708,12 @@ static void paint_main(HWND hwnd, HDC hdc)
             double k = (i == g_abPress) ? press_amount(g_abPressAt) : 0;
             if (k > 0) {
                 int in = (int)(S(4) * k);
-                cell = blend(hot ? g_t.abHover : g_t.abBg, g_t.accent, 0.35 * k);
+                cell = blend(cell, g_t.accent, 0.35 * k);
                 pill = box;
                 InflateRect(&pill, -S(5) - in, -S(3) - in);
                 round_fill(hdc, pill, cell, RADIUS);
                 shrink = (int)(S(2) * k);
-            } else if (hot) {
+            } else if (glow > 0.01) {
                 pill = box;
                 InflateRect(&pill, -S(5), -S(3));
                 round_fill(hdc, pill, cell, RADIUS);
@@ -1745,17 +1763,18 @@ static void paint_main(HWND hwnd, HDC hdc)
             fill_rect(hdc, line, g_t.border);
             for (b = 0; b < BAR_COUNT; b++) {
                 double k = (b == g_barPress) ? press_amount(g_barPressAt) : 0;
-                BOOL hot = (g_barHot == b);
+                double glow = g_barGlow[b];
                 COLORREF bg = g_t.bg;
                 RECT pill = g_barRect[b], icon = g_barRect[b];
-                if (hot || k > 0) {
-                    bg = blend(g_t.ghostHot, g_t.accent, 0.35 * k);
+                if (glow > 0.01 || k > 0) {
+                    bg = blend(blend(g_t.bg, g_t.ghostHot, k > 0 ? 1 : glow),
+                               g_t.accent, 0.35 * k);
                     InflateRect(&pill, -(int)(S(3) * k), -(int)(S(3) * k));
                     round_fill(hdc, pill, bg, S(6));
                 }
                 InflateRect(&icon, -S(7) - (int)(S(2) * k), -S(7) - (int)(S(2) * k));
                 draw_icon(hdc, icon, b == BAR_SAVE ? ICON_SAVE : ICON_IMPORT,
-                          hot ? g_t.text : g_t.muted, bg);
+                          blend(g_t.muted, g_t.text, glow), bg);
             }
         }
 
@@ -1811,6 +1830,8 @@ static void paint_main(HWND hwnd, HDC hdc)
 #define SET_NAV_W  S(140)
 
 static int g_setRowHot = -1;
+static double g_rowGlow[PICK_COUNT];
+static DWORD  g_rowTick;
 
 static void settings_paint(HWND hwnd, HDC hdc)
 {
@@ -1869,13 +1890,14 @@ static void settings_paint(HWND hwnd, HDC hdc)
         {
             double k = (i == g_rowPress) ? press_amount(g_rowPressAt) : 0;
             COLORREF base = (i == g_pick) ? g_t.sel
-                          : (i == g_setRowHot || k > 0) ? g_t.ghostHot : g_t.surface;
+                          : blend(g_t.surface, g_t.ghostHot, k > 0 ? 1 : g_rowGlow[i]);
             RECT pill = row;
             if (k > 0) {
                 InflateRect(&pill, -(int)(S(4) * k), -(int)(S(2) * k));
                 base = blend(base, g_t.accent, 0.3 * k);
             }
-            if (base != g_t.surface) round_fill(hdc, pill, base, RADIUS_BIG);
+            if (i == g_pick || k > 0 || g_rowGlow[i] > 0.01)
+                round_fill(hdc, pill, base, RADIUS_BIG);
         }
 
         /* three chips that say what the theme looks like */
@@ -1953,7 +1975,10 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
 
         p.x = GET_X_LPARAM(l); p.y = GET_Y_LPARAM(l);
         g_setRowHot = settings_row_at(hwnd, p);
-        if (g_setRowHot != was) InvalidateRect(hwnd, NULL, FALSE);
+        if (g_setRowHot != was) {
+            g_rowTick = GetTickCount();
+            SetTimer(hwnd, ID_ANIM, 15, NULL);
+        }
 
         tme.cbSize = sizeof(tme);
         tme.dwFlags = TME_LEAVE;
@@ -1964,7 +1989,11 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
     }
 
     case WM_MOUSELEAVE:
-        if (g_setRowHot != -1) { g_setRowHot = -1; InvalidateRect(hwnd, NULL, FALSE); }
+        if (g_setRowHot != -1) {
+            g_setRowHot = -1;
+            g_rowTick = GetTickCount();
+            SetTimer(hwnd, ID_ANIM, 15, NULL);
+        }
         return 0;
 
     case WM_LBUTTONDOWN: {
@@ -1975,6 +2004,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
         if (row >= 0) {
             g_rowPress = row;
             g_rowPressAt = GetTickCount();
+            g_rowTick = GetTickCount();
             SetTimer(hwnd, ID_ANIM, 15, NULL);
             g_pick = row;
             save_pick();
@@ -1986,10 +2016,16 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
 
     case WM_TIMER:
         if (w == ID_ANIM) {
-            if (press_amount(g_rowPressAt) <= 0) {
-                KillTimer(hwnd, ID_ANIM);
-                g_rowPress = -1;
-            }
+            DWORD now = GetTickCount();
+            double step = (double)(now - g_rowTick) / HOVER_MS;
+            BOOL moving = FALSE;
+            int i;
+            g_rowTick = now;
+            for (i = 0; i < PICK_COUNT; i++)
+                moving |= approach(&g_rowGlow[i], g_setRowHot == i, step);
+            if (press_amount(g_rowPressAt) <= 0) g_rowPress = -1;
+            else moving = TRUE;
+            if (!moving) KillTimer(hwnd, ID_ANIM);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -2261,6 +2297,15 @@ static void toggle_fullscreen(HWND hwnd)
 }
 
 /* ═════════════════════════════════════════════════ main window ══ */
+
+/* starts the main window's animation timer, unless it is already going */
+static void start_anim(HWND hwnd)
+{
+    if (g_animOn) return;
+    g_animOn = TRUE;
+    g_animTick = GetTickCount();
+    SetTimer(hwnd, ID_ANIM, 15, NULL);
+}
 
 /* ═══════════════════════════════════════ saving and importing ══ */
 
@@ -2550,19 +2595,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int bar = bar_hit(p);
             if (bar != g_barHot) {
                 g_barHot = bar;
-                InvalidateRect(hwnd, NULL, FALSE);
+                start_anim(hwnd);
             }
         }
 
         hit = ab_hit(p);
         if (hit != g_abHot) {
-            RECT strip;
             g_abHot = hit;
-            /* only the strip changed, so do not make the whole window,
-             * icons and all, repaint on every hover */
-            GetClientRect(hwnd, &strip);
-            strip.right = S(48);
-            InvalidateRect(hwnd, &strip, FALSE);
+            start_anim(hwnd);
         }
         tme.cbSize = sizeof(tme);
         tme.dwFlags = TME_LEAVE;
@@ -2573,8 +2613,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_MOUSELEAVE:
-        if (g_abHot != -1) { g_abHot = -1; InvalidateRect(hwnd, NULL, FALSE); }
-        if (g_barHot != -1) { g_barHot = -1; InvalidateRect(hwnd, NULL, FALSE); }
+        g_abHot = -1;
+        g_barHot = -1;
+        start_anim(hwnd);
         return 0;
 
     case WM_CONTEXTMENU:
@@ -2624,7 +2665,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (at >= 0) {
             g_barPress = at;
             g_barPressAt = GetTickCount();
-            SetTimer(hwnd, ID_ANIM, 15, NULL);
+            start_anim(hwnd);
             InvalidateRect(hwnd, &g_barRect[at], FALSE);
             UpdateWindow(hwnd);
             if (at == BAR_SAVE) save_as(hwnd); else import_files(hwnd);
@@ -2634,7 +2675,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (at >= 0) {
             g_abPress = at;
             g_abPressAt = GetTickCount();
-            SetTimer(hwnd, ID_ANIM, 15, NULL);
+            start_anim(hwnd);
             ab_click(hwnd, at);
             InvalidateRect(hwnd, &g_abRect[at], FALSE);
             return 0;
@@ -2675,10 +2716,33 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     /* ── output while the program runs ───────────────────────────── */
     case WM_TIMER:
         if (wParam == ID_ANIM) {
-            if (g_abPress >= 0) InvalidateRect(hwnd, &g_abRect[g_abPress], FALSE);
-            if (g_barPress >= 0) InvalidateRect(hwnd, &g_barRect[g_barPress], FALSE);
-            if (press_amount(g_abPressAt) <= 0 && press_amount(g_barPressAt) <= 0) {
+            DWORD now = GetTickCount();
+            double step = (double)(now - g_animTick) / HOVER_MS;
+            BOOL moving = FALSE;
+            RECT strip;
+            int i;
+
+            g_animTick = now;
+            for (i = 0; i < AB_COUNT; i++) {
+                BOOL disabled = (i == AB_RUN && g_running) || (i == AB_STOP && !g_running);
+                moving |= approach(&g_abGlow[i], g_abHot == i && !disabled, step);
+            }
+            for (i = 0; i < BAR_COUNT; i++)
+                moving |= approach(&g_barGlow[i], g_barHot == i, step);
+            if (press_amount(g_abPressAt) > 0 || press_amount(g_barPressAt) > 0)
+                moving = TRUE;
+
+            /* only the strip and the Explorer's buttons move, so do not make
+             * the whole window, editor and all, repaint every frame */
+            GetClientRect(hwnd, &strip);
+            strip.right = S(48);
+            InvalidateRect(hwnd, &strip, FALSE);
+            for (i = 0; i < BAR_COUNT; i++)
+                InvalidateRect(hwnd, &g_barRect[i], FALSE);
+
+            if (!moving) {
                 KillTimer(hwnd, ID_ANIM);
+                g_animOn = FALSE;
                 g_abPress = -1;
                 g_barPress = -1;
             }

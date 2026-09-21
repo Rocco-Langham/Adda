@@ -309,6 +309,16 @@ static double press_amount(int kind, int idx)
 }
 
 static void press(int kind, int idx);
+static void animate(void);
+
+/* Hover: each button's highlight fades in and out over HOVER_SECS rather
+ * than snapping. 0 is untouched, 1 fully lit; the same timer as the click
+ * animation walks each one toward where the pointer says it should be. */
+#define HOVER_SECS  0.12
+static double g_abGlow[AB_COUNT];
+static double g_barGlow[BAR_COUNT];
+static double g_addGlow;
+static double g_rowGlow[PICK_COUNT];
 
 static BOOL system_is_dark(void)
 {
@@ -1524,9 +1534,9 @@ static void paint_main(void)
         BOOL active = (i == g_view);
         /* Run only makes sense while idle, Stop only while running */
         BOOL disabled = (i == AB_RUN && g_running) || (i == AB_STOP && !g_running);
-        BOOL hot = (g_abHot == i) && !disabled;
-        unsigned cell = hot ? g_t.abHover : g_t.abBg;
-        unsigned fg = (active || hot) ? g_t.abIcon : g_t.abIconDim;
+        double glow = disabled ? 0 : g_abGlow[i];
+        unsigned cell = blend(g_t.abBg, g_t.abHover, glow);
+        unsigned fg = active ? g_t.abIcon : blend(g_t.abIconDim, g_t.abIcon, glow);
 
         if (disabled)                   /* halfway between dim and the bar */
             fg = mix(g_t.abIconDim, g_t.abBg);
@@ -1541,7 +1551,7 @@ static void paint_main(void)
         if (k > 0) {
             cell = blend(cell, g_t.accent, 0.35 * k);
             round_fill(NSInsetRect(box, 5 + 4 * k, 3 + 4 * k), cell, RADIUS);
-        } else if (hot) {
+        } else if (glow > 0.01) {
             round_fill(NSInsetRect(box, 5, 3), cell, RADIUS);
         }
 
@@ -1563,9 +1573,10 @@ static void paint_main(void)
                 g_fontSmall, g_t.muted, T_LEFT);
 
         if (g_view == AB_EXPLORER) {
-            unsigned addFg = g_addHot ? g_t.text : g_t.muted;
+            unsigned addFg = blend(g_t.muted, g_t.text, g_addGlow);
             double k = press_amount(PRESS_ADD, 0);
-            unsigned addBg = (g_addHot || k > 0) ? blend(g_t.ghostHot, g_t.accent, 0.35 * k) : g_t.bg;
+            unsigned addBg = blend(blend(g_t.bg, g_t.ghostHot, k > 0 ? 1 : g_addGlow),
+                                   g_t.accent, 0.35 * k);
             if (addBg != g_t.bg) round_fill(NSInsetRect(g_addRect, -3 + 2 * k, -3 + 2 * k), addBg, 6);
             draw_icon(NSInsetRect(g_addRect, 2 + k, 2 + k), ICON_PLUS, addFg, addBg);
 
@@ -1574,13 +1585,14 @@ static void paint_main(void)
                                  NSWidth(g_panelRect) - 20, 1), g_t.border);
             for (int b = 0; b < BAR_COUNT; b++) {
                 double kb = press_amount(PRESS_BAR, b);
-                BOOL hotb = (g_barHot == b);
-                unsigned bg = (hotb || kb > 0) ? blend(g_t.ghostHot, g_t.accent, 0.35 * kb) : g_t.bg;
+                double gb = g_barGlow[b];
+                unsigned bg = blend(blend(g_t.bg, g_t.ghostHot, kb > 0 ? 1 : gb),
+                                    g_t.accent, 0.35 * kb);
                 if (bg != g_t.bg)
                     round_fill(NSInsetRect(g_barRect[b], 3 * kb, 3 * kb), bg, 6);
                 draw_icon(NSInsetRect(g_barRect[b], 7 + 2 * kb, 7 + 2 * kb),
                           b == BAR_SAVE ? ICON_SAVE : ICON_IMPORT,
-                          hotb ? g_t.text : g_t.muted, bg);
+                          blend(g_t.muted, g_t.text, gb), bg);
             }
         }
 
@@ -1640,8 +1652,9 @@ static void settings_paint(NSRect rc)
         unsigned chips[3] = { t.abBg, t.surface, t.accent };
 
         double k = press_amount(PRESS_ROW, i);
-        if (i == g_pick || i == g_setRowHot || k > 0) {
-            unsigned base = (i == g_pick) ? g_t.sel : g_t.ghostHot;
+        if (i == g_pick || g_rowGlow[i] > 0.01 || k > 0) {
+            unsigned base = (i == g_pick) ? g_t.sel
+                          : blend(g_t.surface, g_t.ghostHot, k > 0 ? 1 : g_rowGlow[i]);
             round_fill(NSInsetRect(row, 4 * k, 2 * k), blend(base, g_t.accent, 0.3 * k), RADIUS_BIG);
         }
 
@@ -2114,25 +2127,28 @@ static void build_menu(void)
 
     if (hit != g_abHot) {
         g_abHot = hit;
+        animate();
         /* only the strip changed */
         [self setNeedsDisplayInRect:NSMakeRect(0, 0, 48, NSHeight(self.bounds))];
     }
     if (overAdd != g_addHot) {
         g_addHot = overAdd;
+        animate();
         [self setNeedsDisplayInRect:NSInsetRect(g_addRect, -4, -4)];
     }
     {
         int bar = bar_hit(p);
-        if (bar != g_barHot) { g_barHot = bar; self.needsDisplay = YES; }
+        if (bar != g_barHot) { g_barHot = bar; animate(); }
     }
 }
 
 - (void)mouseExited:(NSEvent *)e
 {
     (void)e;
-    if (g_abHot != -1) { g_abHot = -1; self.needsDisplay = YES; }
-    if (g_addHot) { g_addHot = NO; self.needsDisplay = YES; }
-    if (g_barHot != -1) { g_barHot = -1; self.needsDisplay = YES; }
+    g_abHot = -1;
+    g_addHot = NO;
+    g_barHot = -1;
+    animate();
 }
 
 - (void)mouseDown:(NSEvent *)e
@@ -2305,13 +2321,13 @@ static void build_menu(void)
 {
     int was = g_setRowHot;
     g_setRowHot = settings_row_at([self convertPoint:e.locationInWindow fromView:nil]);
-    if (g_setRowHot != was) self.needsDisplay = YES;
+    if (g_setRowHot != was) animate();
 }
 
 - (void)mouseExited:(NSEvent *)e
 {
     (void)e;
-    if (g_setRowHot != -1) { g_setRowHot = -1; self.needsDisplay = YES; }
+    if (g_setRowHot != -1) { g_setRowHot = -1; animate(); }
 }
 
 - (void)mouseDown:(NSEvent *)e
@@ -2357,23 +2373,60 @@ static void build_menu(void)
 
 @end
 
+/* moves one glow toward its target; YES while it still has somewhere to go */
+static BOOL approach(double *g, BOOL on, double step)
+{
+    double to = on ? 1 : 0;
+    if (*g < to) { *g += step; if (*g > to) *g = to; }
+    else if (*g > to) { *g -= step; if (*g < to) *g = to; }
+    return *g != to;
+}
+
+static CFTimeInterval g_lastTick;
+
+static void animate(void)
+{
+    if (g_anim) return;
+    g_lastTick = CACurrentMediaTime();
+    g_anim = [NSTimer timerWithTimeInterval:1.0 / 60 repeats:YES block:^(NSTimer *t) {
+        CFTimeInterval now = CACurrentMediaTime();
+        double step = (now - g_lastTick) / HOVER_SECS;
+        BOOL moving = NO;
+        int i;
+
+        g_lastTick = now;
+        for (i = 0; i < AB_COUNT; i++) {
+            BOOL disabled = (i == AB_RUN && g_running) || (i == AB_STOP && !g_running);
+            moving |= approach(&g_abGlow[i], g_abHot == i && !disabled, step);
+        }
+        for (i = 0; i < BAR_COUNT; i++)
+            moving |= approach(&g_barGlow[i], g_barHot == i, step);
+        for (i = 0; i < PICK_COUNT; i++)
+            moving |= approach(&g_rowGlow[i], g_setRowHot == i, step);
+        moving |= approach(&g_addGlow, g_addHot, step);
+
+        if (g_pressKind != PRESS_NONE) {
+            if (now - g_pressAt >= PRESS_SECS) g_pressKind = PRESS_NONE;
+            else moving = YES;
+        }
+
+        g_main.needsDisplay = YES;
+        g_settingsView.needsDisplay = YES;
+        if (!moving) {
+            [t invalidate];
+            g_anim = nil;
+        }
+    }];
+    /* common modes, so it keeps going while a menu is tracking */
+    [[NSRunLoop currentRunLoop] addTimer:g_anim forMode:NSRunLoopCommonModes];
+}
+
 static void press(int kind, int idx)
 {
     g_pressKind = kind;
     g_pressIdx = idx;
     g_pressAt = CACurrentMediaTime();
-    if (g_anim) return;
-    g_anim = [NSTimer timerWithTimeInterval:1.0 / 60 repeats:YES block:^(NSTimer *t) {
-        g_main.needsDisplay = YES;
-        g_settingsView.needsDisplay = YES;
-        if (CACurrentMediaTime() - g_pressAt >= PRESS_SECS) {
-            [t invalidate];
-            g_anim = nil;
-            g_pressKind = PRESS_NONE;
-        }
-    }];
-    /* common modes, so it keeps going while a menu is tracking */
-    [[NSRunLoop currentRunLoop] addTimer:g_anim forMode:NSRunLoopCommonModes];
+    animate();
 }
 
 /* ═════════════════════════════════════════════════ line numbers ══ */
