@@ -1,26 +1,26 @@
 # Reading what someone types.
 print Hello. Let me get to know you.
 
-name = ask What is your name?
-age = ask How old are you?
+[name] = ask What is your name?
+[age] = ask How old are you?
 
-print Nice to meet you, {name}.
+print Nice to meet you, [name].
 
-if age > 17
+if [age] > 17
     print You are old enough to vote.
 else
-    print In {18 - age} years you can vote.
+    print In {18 - [age]} years you can vote.
 end
 
 print Now tell me three things you like.
 
-things = list
-count = 1
-while count <= 3
-    thing = ask Thing {count}?
-    add thing to things
-    count = count + 1
+[things] = list
+[count] = 1
+while [count] <= 3
+    [thing] = ask Thing [count]?
+    add [thing] to [things]
+    [count] = [count] + 1
 end
 
-print You like: {things}
-print That is {length of things} things in all.
+print You like: [things]
+print That is {length of [things]} things in all.

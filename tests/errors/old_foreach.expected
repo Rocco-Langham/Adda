@@ -1,0 +1,4 @@
+tests/errors/old_foreach.adda:1: put the name in square brackets: for each [n] in ...
+     1 | for each n in list 1, 2
+       |          ^
+exit: 65

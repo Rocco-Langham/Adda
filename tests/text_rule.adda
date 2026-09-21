@@ -1,36 +1,36 @@
 # the operators-mean-maths rule, and the words it has to leave alone
-date = 2024-01-15
-print {date}
-who = Mary-Jane
-print {who}
-off = 50% off
-print {off}
-code = 007
-print {code}
-title = "Chapter 1 - Intro"
-print {title}
-phone = +44 1234
-print {phone}
-maths = 5 - 3
-print {maths}
-neg = -5
-print {neg}
+[date] = 2024-01-15
+print [date]
+[who] = Mary-Jane
+print [who]
+[off] = 50% off
+print [off]
+[code] = 007
+print [code]
+[title] = "Chapter 1 - Intro"
+print [title]
+[phone] = +44 1234
+print [phone]
+[maths] = 5 - 3
+print [maths]
+[neg] = -5
+print [neg]
 
 # common English that must not be mistaken for keywords
-words = Lord of the Rings
-print {words}
-dinner = fish and chips
-print {dinner}
-answer = that is false
-print {answer}
-reply = nothing much
-print {reply}
-status = not ready
-print {status}
-note = (optional)
-print {note}
-sharp = C# is a language
-print {sharp}
+[words] = Lord of the Rings
+print [words]
+[dinner] = fish and chips
+print [dinner]
+[answer] = that is false
+print [answer]
+[reply] = nothing much
+print [reply]
+[status] = not ready
+print [status]
+[note] = (optional)
+print [note]
+[sharp] = C# is a language
+print [sharp]
 
 # print takes the same rule as the right of an '='
 print 2 + 2

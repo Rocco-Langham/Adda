@@ -131,7 +131,7 @@ static bool as_condition(Value v, uint32_t line)
         if (IS_TEXT(v))
             adda_hint("cond-text",
                       "a test has to be true or false. If you meant maths, "
-                      "put spaces around it: x > 5, not x>5");
+                      "put spaces around it: [x] > 5, not [x]>5");
         adda_error(line, "this test gave %s, but a test has to be true or false",
                    type_name(v.type));
     }
@@ -174,7 +174,8 @@ static Value eval_binary(Node *n, Scope *sc)
         case TK_PLUS:
             if (IS_TEXT(a) || IS_TEXT(b)) {
                 adda_hint("join-text",
-                          "to join text, put the pieces in braces: {first} {last}");
+                          "a variable is written in square brackets, as in [age] + 1. "
+                          "To join text, put the pieces side by side: [first] [last]");
                 adda_error(n->line, "'+' adds numbers, and one of these is text");
             }
             return number_value(as_number(a, n->line, "+") + as_number(b, n->line, "+"));
@@ -209,7 +210,7 @@ static Value eval_binary(Node *n, Scope *sc)
             if (cmp == 0) cmp = x->len < y->len ? -1 : x->len > y->len ? 1 : 0;
         } else {
             adda_hint("cmp-types",
-                      "if you meant maths, remember Adda needs spaces around it: x > 5");
+                      "if you meant maths, remember Adda needs spaces around it: [x] > 5");
             adda_error(n->line, "I cannot compare %s with %s",
                        type_name(a.type), type_name(b.type));
             return nothing_value();

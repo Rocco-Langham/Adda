@@ -1,16 +1,16 @@
-define greet with person
-    print Hello {person}
+define greet with [person]
+    print Hello [person]
 end
 
-define add_up with a, b
-    return a + b
+define add_up with [a], [b]
+    return [a] + [b]
 end
 
-define factorial with n
-    if n <= 1
+define factorial with [n]
+    if [n] <= 1
         return 1
     end
-    return n * call factorial with n - 1
+    return [n] * call factorial with [n] - 1
 end
 
 call greet with Rocco
@@ -20,6 +20,6 @@ print {call factorial with 5}
 # a function defined further down the file is still callable
 print {call double with 21}
 
-define double with n
-    return n * 2
+define double with [n]
+    return [n] * 2
 end

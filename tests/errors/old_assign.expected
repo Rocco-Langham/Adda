@@ -1,0 +1,4 @@
+tests/errors/old_assign.adda:1: to set a variable, put its name in square brackets: [name] = ...
+     1 | name = Rocco
+       | ^
+exit: 65

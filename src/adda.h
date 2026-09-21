@@ -166,6 +166,7 @@ typedef struct {
     uint32_t    line;
     double      number;   /* TK_NUMBER only */
     Text       *text;     /* TK_WORD (interned) and TK_STRING */
+    bool        bracketed;/* TK_WORD written as [name]: a variable */
 } Token;
 
 typedef struct {

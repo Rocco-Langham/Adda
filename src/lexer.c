@@ -195,13 +195,15 @@ TokenList lex_range(const char *base, const char *start, const char *end,
             continue;
         }
 
-        /* [name] is {name} spelt another way: the same three tokens */
+        /* [name] is a variable: a brace, the word, a brace, flagged as bracketed */
         if ((n = adda_bracket_name(p)) != 0) {
             t.kind = TK_LBRACE; t.len = 1;
             emit(&b, t);
             t.kind = TK_WORD; t.start = p + 1; t.len = (uint32_t)n - 2;
             t.text = intern(p + 1, (uint32_t)n - 2);
+            t.bracketed = true;
             emit(&b, t);
+            t.bracketed = false;
             t.kind = TK_RBRACE; t.start = p + n - 1; t.len = 1; t.text = NULL;
             emit(&b, t);
             p += n;

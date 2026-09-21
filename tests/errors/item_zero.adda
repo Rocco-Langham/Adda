@@ -1,2 +1,2 @@
-nums = list 1, 2
-print {item 0 of nums}
+[nums] = list 1, 2
+print {item 0 of [nums]}

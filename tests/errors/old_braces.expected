@@ -1,0 +1,4 @@
+tests/errors/old_braces.adda:2: to use a variable, write [name] - braces are for sums, as in {[name] + 1}
+     2 | print Hello {name}
+       |              ^
+exit: 65

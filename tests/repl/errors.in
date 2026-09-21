@@ -1,10 +1,10 @@
-print {nope}
+print [nope]
 2 + 2
-x = 1 / 0
+[x] = 1 / 0
 end
 print still here
-define risky with n
-    return n / 0
+define risky with [n]
+    return [n] / 0
 end
 call risky with 5
 print after

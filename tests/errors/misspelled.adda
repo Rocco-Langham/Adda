@@ -1,2 +1,2 @@
-total = 10
-print {totl}
+[total] = 10
+print [totl]

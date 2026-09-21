@@ -1,0 +1,4 @@
+tests/errors/old_define.adda:1: put each input's name in square brackets: [n]
+     1 | define double with n
+       |                    ^
+exit: 65

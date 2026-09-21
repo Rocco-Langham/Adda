@@ -1,7 +1,7 @@
 # numbers, text and templates
-name = Rocco
-age = 30
-print Hello {name}, you are {age}
+[name] = Rocco
+[age] = 30
+print Hello [name], you are [age]
 
 print 2 + 2
 print 10 - 3
@@ -10,20 +10,20 @@ print 10 / 4
 print 10 % 3
 print 0.1 + 0.2
 
-x = -5
-print {x}
+[x] = -5
+print [x]
 print {2 + 3 * 4}
 print {(2 + 3) * 4}
-print {0 - x}
+print {0 - [x]}
 
-copy = {name}
-print {copy}
+[copy] = [name]
+print [copy]
 
-blank =
-print [{blank}]
+[blank] =
+print [[blank]]
 
-yes = true
-print {yes}
+[yes] = true
+print [yes]
 print {nothing}
 
 print {{ these braces are literal }}

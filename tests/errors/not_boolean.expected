@@ -1,4 +1,4 @@
 tests/errors/not_boolean.adda:2: this test gave a number, but a test has to be true or false
-     2 | if count
+     2 | if [count]
        | ^
 exit: 65

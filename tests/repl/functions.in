@@ -1,10 +1,10 @@
-define double with n
-    return n * 2
+define double with [n]
+    return [n] * 2
 end
 call double with 21
-x = 5
-call double with x
-define greet with who
-    print Hi {who}
+[x] = 5
+call double with [x]
+define greet with [who]
+    print Hi [who]
 end
 call greet with Rocco

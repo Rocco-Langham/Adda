@@ -1,0 +1,3 @@
+define double with n
+    return [n] * 2
+end

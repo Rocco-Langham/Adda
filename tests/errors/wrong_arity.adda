@@ -1,4 +1,4 @@
-define f with a
-    return a
+define f with [a]
+    return [a]
 end
 print {call f with 1, 2}

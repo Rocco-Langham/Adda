@@ -1,13 +1,13 @@
-n = 7
-if n > 10
+[n] = 7
+if [n] > 10
     print big
-else if n > 5
+else if [n] > 5
     print middle
 else
     print small
 end
-count = 0
-while count < 3
-    print {count}
-    count = count + 1
+[count] = 0
+while [count] < 3
+    print [count]
+    [count] = [count] + 1
 end

@@ -1,35 +1,35 @@
-nums = list 10, 20, 30
-print {nums}
-print {item 1 of nums}
-print {item 3 of nums}
+[nums] = list 10, 20, 30
+print [nums]
+print {item 1 of [nums]}
+print {item 3 of [nums]}
 
-item 2 of nums = 99
-print {nums}
+item 2 of [nums] = 99
+print [nums]
 
-add 40 to nums
-print {nums}
+add 40 to [nums]
+print [nums]
 
-remove item 1 of nums
-print {nums}
-print {length of nums}
+remove item 1 of [nums]
+print [nums]
+print {length of [nums]}
 
-friends = list Rocco, Mary, Sam
-print {friends}
-for each f in friends
-    print Hi {f}
+[friends] = list Rocco, Mary, Sam
+print [friends]
+for each [f] in [friends]
+    print Hi [f]
 end
 
-blank = list
-print {blank}
-print {length of blank}
-add 1 to blank
-print {blank}
+[blank] = list
+print [blank]
+print {length of [blank]}
+add 1 to [blank]
+print [blank]
 
-nested = list 1, (list 2, 3)
-print {nested}
+[nested] = list 1, (list 2, 3)
+print [nested]
 
-total = 0
-for each n in list 1, 2, 3, 4
-    total = total + n
+[total] = 0
+for each [n] in list 1, 2, 3, 4
+    [total] = [total] + [n]
 end
-print total is {total}
+print total is [total]

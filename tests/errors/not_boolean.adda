@@ -1,4 +1,4 @@
-count = 5
-if count
+[count] = 5
+if [count]
     print yes
 end

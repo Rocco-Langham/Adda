@@ -1,5 +1,5 @@
-x = 5
-name = Rocco
+[x] = 5
+[name] = Rocco
 :vars
 :bogus
 :quit

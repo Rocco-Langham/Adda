@@ -211,6 +211,18 @@ static Node *text_node(const char *bytes, uint32_t len, uint32_t line)
     return n;
 }
 
+/* {name} on its own was how a variable used to be written. A bare word is
+ * text now, so rather than quietly print the word, say what to write. */
+static void old_style_hole(const Token *t)
+{
+    if (t->kind != TK_WORD || t->bracketed) return;
+    if (token_is_word(t, "true") || token_is_word(t, "false") ||
+        token_is_word(t, "nothing")) return;
+    adda_error_at(t->start, t->line,
+                  "to use a variable, write [%.*s] - braces are for sums, as in {[%.*s] + 1}",
+                  (int)t->len, t->start, (int)t->len, t->start);
+}
+
 /* Build a text template from raw source, so spacing is preserved exactly and
  * {...} holes keep their real line numbers for error messages. */
 static Node *build_template(P *p, const char *s, const char *e, bool quoted,
@@ -260,6 +272,14 @@ static Node *build_template(P *p, const char *s, const char *e, bool quoted,
 
             if (sb.len) { add_kid(tpl, text_node(sb.bytes, sb.len, line)); sb.len = 0; }
 
+            if (q[0] == '[') {                  /* [name]: straight to the variable */
+                Node *v = node(N_VAR, line);
+                v->name = intern(q + 1, (uint32_t)(close - q - 1));
+                add_kid(tpl, v);
+                q = close + 1;
+                continue;
+            }
+
             {
                 TokenList sub = lex_range(s, q + 1, close, line);
                 P inner;
@@ -278,6 +298,7 @@ static Node *build_template(P *p, const char *s, const char *e, bool quoted,
                 if (cur.end == 0)
                     adda_error_at(q, line, "this {} is empty - put a value inside it");
 
+                if (cur.end == 1 && q[0] == '{') old_style_hole(&inner.t[0]);
                 hole = expr(&cur);
                 if (cur.i < cur.end)
                     adda_error_at(inner.t[cur.i].start, inner.t[cur.i].line,
@@ -391,6 +412,8 @@ static Node *primary(E *e)
         sub.end = (uint32_t)close;
         if (sub.i >= sub.end)
             adda_error_at(t->start, line, "there is nothing inside these brackets");
+        if (t->start[0] == '{' && sub.end == sub.i + 1)
+            old_style_hole(&p->t[sub.i]);
         inner = expr(&sub);
         e->i = (uint32_t)close + 1;
         return inner;
@@ -432,7 +455,7 @@ static Node *primary(E *e)
 
     /* `ask <prompt>` reads a line from whoever is running the program. The
      * prompt is an ordinary run, so `ask How old are you?` needs no quotes and
-     * `ask Hello {name}, how old are you?` fills in the value. */
+     * `ask Hello [name], how old are you?` fills in the value. */
     if (token_is_word(t, "ask")) {
         Node *n = node(N_ASK, line);
         e->i++;
@@ -498,19 +521,20 @@ static Node *primary(E *e)
         return n;
     }
 
-    /* a plain word: either `key of container`, or a variable */
+    /* a plain word: either `key of container`, a variable written [name], or
+     * just the word itself - a bare word is always text */
     e->i++;
-    if (at_word(e, "of")) {
+    if (!t->bracketed && at_word(e, "of")) {
         Node *n = node(N_FIELD, line);
         n->name = t->text;
         e->i++;
         n->a = primary(e);                 /* right-associative on purpose */
         return n;
     }
+    if (!t->bracketed) return text_node(t->start, t->len, line);
     {
         Node *n = node(N_VAR, line);
         n->name = t->text;
-        n->flag = p->in_condition != 0;    /* soft: unknown words are their own text */
         return n;
     }
 }
@@ -658,17 +682,6 @@ static Node *parse_run(P *p, uint32_t from, uint32_t to)
     if (to <= from) return text_node("", 0, at(p, from)->line);
     if (run_is_value(p, from, to)) return parse_value(p, from, to);
 
-    /* A run that is one bare word means the variable of that name when there is
-     * one, and otherwise the word itself. Without this, `total = count` quietly
-     * stores the word "count", which is never what anyone means. Conditions
-     * already work this way, so the rule is the same everywhere. */
-    if (to - from == 1 && p->t[from].kind == TK_WORD) {
-        Node *n = node(N_VAR, p->t[from].line);
-        n->name = p->t[from].text;
-        n->flag = true;                     /* soft: unknown words are text */
-        return n;
-    }
-
     return parse_text_run(p, from, to);
 }
 
@@ -773,7 +786,10 @@ static Node *parse_foreach(P *p)
     i++;
     skip_bracket(p, &i, e);
     if (i >= e || p->t[i].kind != TK_WORD)
-        adda_error_at(p->t[s].start, line, "for each needs a name, as in: for each [n] in nums");
+        adda_error_at(p->t[s].start, line, "for each needs a name, as in: for each [n] in [nums]");
+    if (!p->t[i].bracketed)
+        adda_error_at(p->t[i].start, line, "put the name in square brackets: for each [%.*s] in ...",
+                      (int)p->t[i].len, p->t[i].start);
     n->name = p->t[i].text;
     i++;
     skip_close(p, &i, e);
@@ -818,6 +834,10 @@ static Node *parse_define(P *p)
             skip_bracket(p, &i, e);
             if (p->t[i].kind != TK_WORD)
                 adda_error_at(p->t[i].start, p->t[i].line, "this is not a name I can use");
+            if (!p->t[i].bracketed)
+                adda_error_at(p->t[i].start, p->t[i].line,
+                              "put each input's name in square brackets: [%.*s]",
+                              (int)p->t[i].len, p->t[i].start);
             if (n->nparams == 16)
                 adda_error_at(p->t[i].start, p->t[i].line, "that is too many inputs for one function");
             n->params[n->nparams++] = p->t[i].text;
@@ -870,6 +890,10 @@ static Node *parse_assign(P *p, uint32_t s, uint32_t e, uint32_t eq)
     if (eq == s)
         adda_error_at(p->t[s].start, line, "there is nothing to the left of the '='");
 
+    if (eq == s + 1 && p->t[s].kind == TK_WORD && !p->t[s].bracketed)
+        adda_error_at(p->t[s].start, line,
+                      "to set a variable, put its name in square brackets: [%.*s] = ...",
+                      (int)p->t[s].len, p->t[s].start);
     n->a = parse_value(p, s, eq);
     if (n->a->kind != N_VAR && n->a->kind != N_FIELD && n->a->kind != N_INDEX)
         adda_error_at(p->t[s].start, line, "I cannot put a value into that");

@@ -3,12 +3,12 @@
 A very small programming language with as little punctuation as I could get away with.
 
 ```adda
-name = Rocco
-age = 30
+[name] = Rocco
+[age] = 30
 
-print Hello {name}, you are {age}
+print Hello [name], you are [age]
 
-if age > 18
+if [age] > 18
     print You are an adult
 end
 ```
@@ -24,51 +24,54 @@ Adda is a tree-walking interpreter written in C99, in about 2,600 lines.
 Letting text go unquoted creates a real question: in `x = 2 + 3`, is that the
 number `5` or the text `"2 + 3"`? Adda answers it the same way every time:
 
-> **Operators mean maths. Braces mean "the value of".**
+> **Operators mean maths. `[name]` means the variable called name.**
 
 ```adda
-name = Rocco            # no operator, so this is text
-age  = 30               # a number on its own
-next = age + 1          # spaced operator, so this is maths -> 31
-print Hello {name}      # braces pull a value into text
+[name] = Rocco            # no operator, so this is text
+[age]  = 30               # a number on its own
+[next] = [age] + 1        # spaced operator, so this is maths -> 31
+print Hello [name]        # brackets pull a value into text
+print {[age] + 1}         # braces work out a sum inside text
 ```
 
 An operator only counts when it has **a space on both sides**. That is what
 keeps ordinary writing intact:
 
 ```adda
-date  = 2024-01-15      # one word, so text  (not 2024 minus 1 minus 15)
-who   = Mary-Jane       # text
-off   = 50% off         # text
-code  = 007             # text, and it keeps its leading zeros
-maths = 5 - 3           # spaced, so this really is 2
+[date]  = 2024-01-15      # one word, so text  (not 2024 minus 1 minus 15)
+[who]   = Mary-Jane       # text
+[off]   = 50% off         # text
+[code]  = 007             # text, and it keeps its leading zeros
+[maths] = 5 - 3           # spaced, so this really is 2
 ```
 
 If a piece of text has to contain an operator, quote it:
 
 ```adda
-title = "Chapter 1 - Intro"
+[title] = "Chapter 1 - Intro"
 ```
 
 Reading input works the same way — no quotes around the question:
 
 ```adda
-name = ask What is your name?
-age  = ask How old are you?
-print Next year you will be {age + 1}
+[name] = ask What is your name?
+[age]  = ask How old are you?
+print Next year you will be {[age] + 1}
 ```
 
 An answer becomes a number under exactly the rule source literals use, so `30`
 is something you can add to, while `007` keeps its zeros.
 
-A bare word that happens to name a variable means that variable, so copying
-values reads the way you would expect:
+A variable is always written in square brackets, and a bare word is always
+text, so there is never any guessing:
 
 ```adda
-total = count           # the value of count
-name  = Rocco           # just the word, since nothing is called Rocco
-word  = "count"         # the word, even though count exists
+[total] = [count]         # the value of count
+[word]  = count           # just the word count
 ```
+
+Writing a variable the old way - `name = Rocco` or `{name}` - is an error that
+tells you to use `[name]`.
 
 ## Build and run
 
@@ -111,11 +114,11 @@ $ ./adda
 Adda - type :help for help, :quit to leave.
 adda> 2 + 2
 4
-adda> name = Rocco
-adda> name
+adda> [name] = Rocco
+adda> [name]
 Rocco
 adda> if 2 > 1
-  ...     print yes, {name}
+  ...     print yes, [name]
   ... end
 yes, Rocco
 ```
@@ -124,11 +127,11 @@ Anything you define stays defined, so you can build up a program a piece at a
 time. A mistake reports itself and the session carries on:
 
 ```
-adda> print {totl}
+adda> print [totl]
 typed:7: 'totl' is not defined - did you mean 'total'?
-       7 | print {totl}
+       7 | print [totl]
          | ^
-adda> print {total}
+adda> print [total]
 10
 ```
 
@@ -149,8 +152,8 @@ opens it on either.
 ┌────┬────────────┬──────────────────────────────────┐
 │ 📄 │ EXPLORER   │  [ Run ]  [ Stop ]               │
 │ 🔍 │ hello.adda ├──────────────────────────────────┤
-│    │ ask.adda   │  name = ask What is your name?   │
-│    │ lists.adda │  print Hello, {name}             │
+│    │ ask.adda   │  [name] = ask What is your name? │
+│    │ lists.adda │  print Hello, [name]             │
 │    │            ╞═════ drag to resize ═════════════╡
 │    │            │  What is your name? Rocco        │
 │ 📕 │            │  Hello, Rocco                    │
@@ -190,53 +193,53 @@ On a Mac the window is the same, with the Mac's keys:
 ```adda
 # comments start with #
 
-name = Rocco                    # text
-age = 30                        # number
-ok = true                       # true / false / nothing
-next = age + 1                  # + - * / %
+[name] = Rocco                    # text
+[age] = 30                        # number
+[ok] = true                       # true / false / nothing
+[next] = [age] + 1                  # + - * / %
 
-print Hello {name}              # print takes the same rule as the right of '='
-who = ask What is your name?    # reads a line from whoever runs the program
+print Hello [name]              # print takes the same rule as the right of '='
+[who] = ask What is your name?    # reads a line from whoever runs the program
 
-if age > 18                     # is, is not, < > <= >=, and, or, not
+if [age] > 18                     # is, is not, < > <= >=, and, or, not
     print Adult
-else if age > 12
+else if [age] > 12
     print Teenager
 else
     print Child
 end
 
-while age < 40
-    age = age + 1
+while [age] < 40
+    [age] = [age] + 1
 end
 
-define greet with person        # functions live at the top level
-    print Hello {person}
+define greet with [person]        # functions live at the top level
+    print Hello [person]
     return true
 end
 
 call greet with Rocco
 
-nums = list 10, 20, 30          # lists count from 1
-print {item 1 of nums}
-item 1 of nums = 99
-add 40 to nums
-remove item 2 of nums
-print {length of nums}
-print {has 40 of nums}
+[nums] = list 10, 20, 30          # lists count from 1
+print {item 1 of [nums]}
+item 1 of [nums] = 99
+add 40 to [nums]
+remove item 2 of [nums]
+print {length of [nums]}
+print {has 40 of [nums]}
 
-for each n in nums
-    print {n}
+for each [n] in [nums]
+    print [n]
 end
 
-person = map                    # maps keep the order you add keys in
-name of person = Rocco
-age of person = 30
-print {name of person}
-print {has "age" of person}
+[person] = map                    # maps keep the order you add keys in
+name of [person] = Rocco
+age of [person] = 30
+print {name of [person]}
+print {has "age" of [person]}
 
-for each key in person
-    print {key} is {item key of person}
+for each [key] in [person]
+    print [key] is {item [key] of [person]}
 end
 ```
 
@@ -260,12 +263,11 @@ These are deliberate, and each has a way around it:
 
 | What | Why | What to write instead |
 |---|---|---|
-| `range = 1 - 10` is maths | The spaces make it maths | `1-10`, or `"1 - 10"` |
-| `if x>5` is an error | No spaces, so it is one word | `if x > 5` |
+| `[range] = 1 - 10` is maths | The spaces make it maths | `1-10`, or `"1 - 10"` |
+| `if [x]>5` is an error | No spaces, so it is not a comparison | `if [x] > 5` |
 | `length`, `item`, `list`, `map`, `call`, `has` cannot be variable names | They start a value | `total_length`, `first_item` |
-| `note = press # for menu` loses the tail | `#` starts a comment | `note = "press # for menu"` |
-| `x = -y` is text | `-` has no space after it | `x = 0 - y` |
-| A misspelled word in a comparison becomes text | Bare words fall back to text | Adda suggests the nearest name when it can |
+| `[note] = press # for menu` loses the tail | `#` starts a comment | `[note] = "press # for menu"` |
+| `if [total] is totl` compares with the word | A bare word is always text | `if [total] is [totl]` - then a typo is an error, with a suggestion |
 
 Memory grows in a long loop that keeps building text: Adda allocates from an
 arena and frees it all at exit, with no collector yet. Fine for scripts,

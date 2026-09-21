@@ -1,5 +1,5 @@
-adda: to join text, put the pieces in braces: {first} {last}
+adda: a variable is written in square brackets, as in [age] + 1. To join text, put the pieces side by side: [first] [last]
 tests/errors/text_maths.adda:2: '+' adds numbers, and one of these is text
-     2 | print {name + 1}
+     2 | print {[name] + 1}
        | ^
 exit: 65
