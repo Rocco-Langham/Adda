@@ -139,6 +139,10 @@ static Theme g_t;
 @interface CheatTable : NSTableView
 @end
 
+/* the strip of line numbers down the left of the code box */
+@interface LineNumbers : NSRulerView
+@end
+
 @interface ThemedRow : NSTableRowView
 @end
 
@@ -376,6 +380,7 @@ static void apply_theme(void)
 
     style_text(g_code);
     style_text(g_console);
+    g_codeScroll.verticalRulerView.needsDisplay = YES;
 
     g_find.textColor = col(g_t.text);
     g_find.backgroundColor = col(g_t.bg);
@@ -1018,6 +1023,7 @@ static void open_file(NSString *path)
     if (!text) text = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
 
     g_code.string = text;
+    g_codeScroll.verticalRulerView.needsDisplay = YES;
     style_text(g_code);
     /* the old undo steps point into text that has gone */
     [g_code.undoManager removeAllActions];
@@ -1147,6 +1153,9 @@ static void begin_rename(NSInteger row)
      * responder, so that pass has to happen first or it inherits a stale,
      * unresolved one and renders blank. */
     [cell layoutSubtreeIfNeeded];
+    fprintf(stderr, "BEGIN_RENAME f.frame=%s cell.bounds=%s constraints=%ld\n",
+            NSStringFromRect(f.frame).UTF8String, NSStringFromRect(cell.bounds).UTF8String,
+            (long)f.constraints.count);
     [g_win makeFirstResponder:f];
 
     /* the name without its .adda selected, as the Finder does - a folder has
@@ -1779,6 +1788,20 @@ static void build_window(void)
     g_code = g_codeScroll.documentView;
     g_code.allowsUndo = YES;
 
+    {
+        LineNumbers *ln = [[LineNumbers alloc] initWithScrollView:g_codeScroll
+                                                      orientation:NSVerticalRuler];
+        ln.clientView = g_code;
+        ln.ruleThickness = 44;
+        g_codeScroll.verticalRulerView = ln;
+        g_codeScroll.hasVerticalRuler = YES;
+        g_codeScroll.rulersVisible = YES;
+        /* a new or removed line renumbers everything below it */
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSTextDidChangeNotification object:g_code queue:nil
+                    usingBlock:^(NSNotification *n) { (void)n; ln.needsDisplay = YES; }];
+    }
+
     /* Undo could resurrect output we trimmed, or unwind an append, so the
      * console simply has no undo. */
     g_consoleScroll = make_text_view([ConsoleView class]);
@@ -2199,6 +2222,71 @@ static void press(int kind, int idx)
     [[NSRunLoop currentRunLoop] addTimer:g_anim forMode:NSRunLoopCommonModes];
 }
 
+/* ═════════════════════════════════════════════════ line numbers ══ */
+
+@implementation LineNumbers
+
+- (BOOL)isFlipped { return YES; }
+
+/* The code box wraps long lines, so a number goes only on the first row of
+ * each real line; the rows a long line wraps onto get none. */
+- (void)drawHashMarksAndLabelsInRect:(NSRect)dirty
+{
+    NSTextView *tv = (NSTextView *)self.clientView;
+    NSLayoutManager *lm = tv.layoutManager;
+    NSString *text = tv.string;
+    NSUInteger len = text.length, i;
+    NSRect visible = [tv visibleRect];
+    NSRange glyphs, chars;
+    __block NSUInteger line = 1;
+    CGFloat inset = tv.textContainerOrigin.y;
+    NSDictionary *attrs = @{ NSFontAttributeName: g_fontMono,
+                             NSForegroundColorAttributeName: col(g_t.muted) };
+    CGFloat right = NSWidth(self.bounds) - 8;
+
+    (void)dirty;
+    fill_rect(self.bounds, g_t.surface);
+    fill_rect(NSMakeRect(NSWidth(self.bounds) - 1, 6, 1, NSHeight(self.bounds) - 12),
+              g_t.border);
+
+    glyphs = [lm glyphRangeForBoundingRect:NSOffsetRect(visible, 0, -inset)
+                           inTextContainer:tv.textContainer];
+    chars = [lm characterRangeForGlyphRange:glyphs actualGlyphRange:NULL];
+
+    for (i = 0; i < chars.location && i < len; i++)
+        if ([text characterAtIndex:i] == '\n') line++;
+
+    void (^label)(NSUInteger, CGFloat, CGFloat) = ^(NSUInteger n, CGFloat y, CGFloat h) {
+        NSString *s = [NSString stringWithFormat:@"%lu", (unsigned long)n];
+        NSSize sz = [s sizeWithAttributes:attrs];
+        NSPoint at = [self convertPoint:NSMakePoint(0, y + inset) fromView:tv];
+        [s drawAtPoint:NSMakePoint(right - sz.width, at.y + (h - sz.height) / 2)
+        withAttributes:attrs];
+    };
+
+    __block BOOL firstFrag = YES;
+    [lm enumerateLineFragmentsForGlyphRange:glyphs
+        usingBlock:^(NSRect r, NSRect used, NSTextContainer *c, NSRange g, BOOL *stop) {
+        NSUInteger at = [lm characterIndexForGlyphAtIndex:g.location];
+        BOOL starts = (at == 0) || [text characterAtIndex:at - 1] == '\n';
+        (void)used; (void)c; (void)stop;
+        if (starts && !firstFrag) line++;
+        firstFrag = NO;
+        if (starts) label(line, NSMinY(r), NSHeight(r));
+    }];
+
+    /* the empty last line after a trailing newline has no glyphs of its own */
+    if (!NSIsEmptyRect(lm.extraLineFragmentRect)) {
+        NSRect r = lm.extraLineFragmentRect;
+        NSUInteger n = 1;
+        for (i = 0; i < len; i++)
+            if ([text characterAtIndex:i] == '\n') n++;
+        label(n, NSMinY(r), NSHeight(r));
+    }
+}
+
+@end
+
 /* ═══════════════════════════════════════════════ the controller ══ */
 
 static Cell *make_cell(NSTableView *tv, BOOL twoLines)
@@ -2575,6 +2663,11 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     (void)column;
     [NSFileManager.defaultManager fileExistsAtPath:item isDirectory:&isDir];
     c.textField.attributedStringValue = tree_label(item.lastPathComponent, isDir);
+    [c layoutSubtreeIfNeeded];
+    fprintf(stderr, "VIEWFOR item=%s field.frame=%s field.str=%s field.hidden=%d field.alpha=%.2f cell.hidden=%d\n",
+            item.lastPathComponent.UTF8String, NSStringFromRect(c.textField.frame).UTF8String,
+            c.textField.attributedStringValue.string.UTF8String, c.textField.hidden, c.textField.alphaValue,
+            c.hidden);
     return c;
 }
 

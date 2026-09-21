@@ -534,6 +534,7 @@ static void fill_rect(HDC hdc, RECT r, COLORREF c)
 /* Rounded versions. GDI's RoundRect takes the full ellipse size, so the
  * corner radius is half of what gets passed. */
 #define RADIUS      S(8)
+#define GUTTER_W    S(44)       /* line-number strip in the code box */
 #define RADIUS_BIG  S(12)
 
 static void round_fill(HDC hdc, RECT r, COLORREF c, int radius)
@@ -1511,11 +1512,89 @@ static void layout(HWND hwnd)
         RECT r;
         GetClientRect(hwndCode, &r);
         InflateRect(&r, -S(8), -S(6));
+        r.left = GUTTER_W + S(8);           /* room for the line numbers */
         SendMessageA(hwndCode, EM_SETRECT, 0, (LPARAM)&r);
         GetClientRect(hwndConsole, &r);
         InflateRect(&r, -S(8), -S(6));
         SendMessageA(hwndConsole, EM_SETRECT, 0, (LPARAM)&r);
     }
+}
+
+/* ═════════════════════════════════════════════════ line numbers ══ */
+
+/* The code box wraps long lines, so a number goes only on the first row of
+ * each real line; the rows a long line wraps onto get none. The numbers
+ * are painted into the edit control itself, straight after it paints. */
+static void paint_gutter(HWND h)
+{
+    RECT rc, fmt, g, num;
+    HDC dc;
+    HGDIOBJ oldFont;
+    TEXTMETRICA tm;
+    int len, first, count, v, line, y;
+    char *text, buf[16];
+
+    GetClientRect(h, &rc);
+    SendMessageA(h, EM_GETRECT, 0, (LPARAM)&fmt);
+
+    len = GetWindowTextLengthA(h);
+    text = malloc((size_t)len + 1);
+    if (!text) return;
+    GetWindowTextA(h, text, len + 1);
+
+    dc = GetDC(h);
+    g = rc;
+    g.right = GUTTER_W;
+    fill_rect(dc, g, g_t.surface);
+    g.left = g.right - 1;
+    InflateRect(&g, 0, -S(6));
+    fill_rect(dc, g, g_t.border);
+
+    oldFont = SelectObject(dc, hFontMono);
+    GetTextMetricsA(dc, &tm);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, g_t.muted);
+
+    first = (int)SendMessageA(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    count = (int)SendMessageA(h, EM_GETLINECOUNT, 0, 0);
+
+    /* the real line the first visible row belongs to */
+    line = 1;
+    {
+        int start = (int)SendMessageA(h, EM_LINEINDEX, (WPARAM)first, 0), i;
+        for (i = 0; i < start && i < len; i++)
+            if (text[i] == '\n') line++;
+    }
+
+    for (v = first, y = fmt.top; v < count && y < rc.bottom; v++, y += tm.tmHeight) {
+        int idx = (int)SendMessageA(h, EM_LINEINDEX, (WPARAM)v, 0);
+        BOOL starts = (v == 0) || (idx > 0 && idx <= len && text[idx - 1] == '\n');
+
+        if (v > first && starts) line++;
+        if (!starts) continue;
+
+        num.left = 0;
+        num.right = GUTTER_W - S(8);
+        num.top = y;
+        num.bottom = y + tm.tmHeight;
+        snprintf(buf, sizeof buf, "%d", line);
+        DrawTextA(dc, buf, -1, &num, DT_RIGHT | DT_SINGLELINE | DT_NOPREFIX);
+    }
+
+    SelectObject(dc, oldFont);
+    ReleaseDC(h, dc);
+    free(text);
+}
+
+static LRESULT CALLBACK CodeProc(HWND h, UINT msg, WPARAM w, LPARAM l,
+                                 UINT_PTR id, DWORD_PTR ref)
+{
+    LRESULT res;
+    (void)id; (void)ref;
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(h, CodeProc, 0);
+    res = DefSubclassProc(h, msg, w, l);
+    if (msg == WM_PAINT) paint_gutter(h);
+    return res;
 }
 
 /* ══════════════════════════════════════════════════ main paint ══ */
@@ -2172,6 +2251,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             WS_CHILD | WS_VISIBLE | WS_VSCROLL |
             ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | ES_NOHIDESEL,
             0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)ID_CODE, inst, NULL);
+        SetWindowSubclass(hwndCode, CodeProc, 0, 0);
 
         hwndConsole = CreateWindowExA(0, "EDIT", "",
             WS_CHILD | WS_VISIBLE | WS_VSCROLL |
@@ -2429,6 +2509,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         case ID_FIND:
             if (HIWORD(wParam) == EN_CHANGE) find_in_code(FALSE);
+            return 0;
+        case ID_CODE:
+            /* a new or removed line renumbers everything below it */
+            if (HIWORD(wParam) == EN_CHANGE || HIWORD(wParam) == EN_VSCROLL) {
+                RECT g;
+                GetClientRect(hwndCode, &g);
+                g.right = GUTTER_W;
+                InvalidateRect(hwndCode, &g, FALSE);
+            }
             return 0;
         }
         return 0;
