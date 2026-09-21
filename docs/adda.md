@@ -501,6 +501,12 @@ Down the left side:
 | Cheat sheet | Everything in this guide as searchable one-liners. Double-click one to put the code into your program. |
 | Settings | **Themes**: Follow Windows, Light, Dark, Beige, or Abyss. |
 
+Along the bottom of the Explorer, **Save** writes your code wherever you choose,
+and **Import** brings files in - single `.adda` files, or a whole folder with
+everything inside it. On Windows, Import first asks which of the two you want.
+After an import the Explorer lists just what came in, and opens its
+`first.adda` (or its first program).
+
 Clicking the Explorer or Search icon you are already on closes the panel again.
 Whichever theme you pick is remembered for next time.
 

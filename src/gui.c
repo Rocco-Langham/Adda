@@ -34,6 +34,7 @@
 #include <uxtheme.h>
 #include <commdlg.h>      /* the Save As and Open dialogs */
 #include <shellapi.h>     /* SHFileOperation, so deleting goes to the bin */
+#include <shlobj.h>       /* SHBrowseForFolder, for importing a folder */
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
@@ -2600,6 +2601,100 @@ static void save_as(HWND hwnd)
 
 /* Copies the chosen files next to adda-gui.exe, where the Explorer looks,
  * numbering any whose name is already taken, and opens the last one. */
+static void import_files(HWND hwnd);
+static void import_folder(HWND hwnd);
+
+/* The Open dialog cannot pick a folder, so Import asks which it is first. */
+static void import_menu(HWND hwnd)
+{
+    HMENU m = CreatePopupMenu();
+    POINT at;
+    int pick;
+
+    AppendMenuA(m, MF_STRING, 1, "Import Files...");
+    AppendMenuA(m, MF_STRING, 2, "Import Folder...");
+    at.x = g_barRect[BAR_IMPORT].left;
+    at.y = g_barRect[BAR_IMPORT].top;
+    ClientToScreen(hwnd, &at);
+    pick = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_BOTTOMALIGN | TPM_LEFTALIGN,
+                               at.x, at.y, 0, hwnd, NULL);
+    DestroyMenu(m);
+    if (pick == 1) import_files(hwnd);
+    if (pick == 2) import_folder(hwnd);
+}
+
+/* Copies a whole folder, with everything inside it, into the Explorer's
+ * folder - numbered if the name is taken - then lists the programs in it and
+ * opens its first.adda, or else its first program. */
+static void import_folder(HWND hwnd)
+{
+    BROWSEINFOA bi;
+    LPITEMIDLIST picked;
+    char from[MAX_PATH + 2], dir[MAX_PATH], to[MAX_PATH * 2 + 16], inside[MAX_PATH * 2 + 20];
+    const char *leaf;
+    SHFILEOPSTRUCTA op;
+    int i, first = -1;
+    size_t n;
+
+    ZeroMemory(&bi, sizeof bi);
+    bi.hwndOwner = hwnd;
+    bi.lpszTitle = "Choose a folder to import";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS;
+    picked = SHBrowseForFolderA(&bi);
+    if (!picked) return;
+    ZeroMemory(from, sizeof from);          /* SHFileOperation wants two NULs */
+    if (!SHGetPathFromIDListA(picked, from)) { CoTaskMemFree(picked); return; }
+    CoTaskMemFree(picked);
+
+    n = strlen(from);
+    while (n > 0 && from[n - 1] == '\\') from[--n] = '\0';
+    leaf = strrchr(from, '\\');
+    leaf = leaf ? leaf + 1 : from;
+
+    explorer_dir(dir, sizeof dir);
+    snprintf(to, sizeof to, "%s%s", dir, leaf);
+    for (i = 2; GetFileAttributesA(to) != INVALID_FILE_ATTRIBUTES; i++)
+        snprintf(to, sizeof to, "%s%s %d", dir, leaf, i);
+    to[strlen(to) + 1] = '\0';
+
+    ZeroMemory(&op, sizeof op);
+    op.hwnd = hwnd;
+    op.wFunc = FO_COPY;
+    op.pFrom = from;
+    op.pTo = to;
+    op.fFlags = FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR | FOF_NOERRORUI | FOF_SILENT;
+    if (SHFileOperationA(&op) != 0 || op.fAnyOperationsAborted) {
+        MessageBoxA(hwnd, "That folder could not be imported.\n"
+                          "It may be locked, or the folder may be read-only.",
+                    "Import", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    /* show only what came in: the programs in the new folder */
+    rescan_files();
+    g_fileCount = 0;
+    snprintf(inside, sizeof inside, "%s\\", to);
+    scan_dir(inside);
+    leaf = strrchr(to, '\\');
+    leaf = leaf ? leaf + 1 : to;
+    for (i = 0; i < g_fileCount; i++) {
+        char label[MAX_PATH * 3];
+        snprintf(label, sizeof label, "%s\\%s", leaf, g_files[i].name);
+        snprintf(g_files[i].name, sizeof g_files[i].name, "%.*s",
+                 (int)sizeof g_files[i].name - 1, label);
+        if (first < 0 || strstr(g_files[i].name, "\\first.adda")) first = i;
+    }
+    g_importOnly = TRUE;
+    SendMessageA(hwndFiles, LB_RESETCONTENT, 0, 0);
+    for (i = 0; i < g_fileCount; i++)
+        SendMessageA(hwndFiles, LB_ADDSTRING, 0, (LPARAM)g_files[i].name);
+    InvalidateRect(hwndMain, &g_panelRect, FALSE);   /* the heading says IMPORTED */
+    if (first >= 0) {
+        SendMessageA(hwndFiles, LB_SETCURSEL, (WPARAM)first, 0);
+        open_file(first);
+    }
+}
+
 static void import_files(HWND hwnd)
 {
     OPENFILENAMEA ofn;
@@ -3004,7 +3099,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             start_anim(hwnd);
             InvalidateRect(hwnd, &g_barRect[at], FALSE);
             UpdateWindow(hwnd);
-            if (at == BAR_SAVE) save_as(hwnd); else import_files(hwnd);
+            if (at == BAR_SAVE) save_as(hwnd); else import_menu(hwnd);
             return 0;
         }
         at = ab_hit(p);

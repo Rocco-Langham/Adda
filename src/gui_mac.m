@@ -1401,9 +1401,10 @@ static void save_as(void)
     }];
 }
 
-/* Copies the chosen files into the Explorer's folder (or the folder that is
- * selected in it), numbering any whose name is already taken, and opens the
- * last one. */
+/* Copies the chosen files and folders into the Explorer's folder (or the
+ * folder that is selected in it), numbering any whose name is already taken.
+ * A folder comes with everything inside it. Opens the last file, or for a
+ * folder its first.adda, else its first program. */
 static void import_files(void)
 {
     NSOpenPanel *panel = [NSOpenPanel openPanel];
@@ -1411,12 +1412,13 @@ static void import_files(void)
     panel.title = @"Import";
     panel.prompt = @"Import";
     panel.canChooseFiles = YES;
-    panel.canChooseDirectories = NO;
+    panel.canChooseDirectories = YES;       /* a whole folder, too */
     panel.allowsMultipleSelection = YES;
     panel.allowedContentTypes = adda_types();
+    panel.message = @"Choose .adda files, or a whole folder.";
 
     [panel beginSheetModalForWindow:g_win completionHandler:^(NSModalResponse r) {
-        NSString *dir = target_dir(), *last = nil;
+        NSString *dir = target_dir(), *last = nil, *lastDir = nil;
         NSMutableArray<NSString *> *got = [NSMutableArray array];
         int failed = 0;
 
@@ -1424,24 +1426,38 @@ static void import_files(void)
         for (NSURL *url in panel.URLs) {
             NSString *name = url.lastPathComponent;
             NSString *to = unique_path(dir, name.stringByDeletingPathExtension, name.pathExtension);
+            BOOL isDir = NO;
+            [NSFileManager.defaultManager fileExistsAtPath:url.path isDirectory:&isDir];
             if ([NSFileManager.defaultManager copyItemAtPath:url.path toPath:to error:NULL]) {
-                last = to;
+                if (isDir) lastDir = to; else last = to;
                 [got addObject:to];
             }
             else
                 failed++;
         }
         rescan_files();
-        if (last) {
+        if (got.count) {
             /* show only what came in; nothing else is touched on disk */
             g_importOnly = [got copy];
             [g_files reloadItem:nil reloadChildren:YES];
             g_main.needsDisplay = YES;          /* the heading says IMPORTED */
+        }
+        if (!last && lastDir) {
+            /* a folder: open it up, and open its first.adda or first program */
+            BOOL sub = NO;
+            [g_files expandItem:lastDir];
+            for (NSString *kid in children_of(lastDir)) {
+                if ([NSFileManager.defaultManager fileExistsAtPath:kid isDirectory:&sub] && sub)
+                    continue;
+                if (!last || [kid.lastPathComponent isEqualToString:@"first.adda"]) last = kid;
+            }
+        }
+        if (last) {
             select_by_path(last);
             open_file(last);
         }
         if (failed)
-            warn(@"Some files could not be imported.\n"
+            warn(@"Some files or folders could not be imported.\n"
                  @"They may be locked, or the folder may be read-only.");
     }];
 }
