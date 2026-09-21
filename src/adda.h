@@ -174,6 +174,9 @@ typedef struct {
 } TokenList;
 
 TokenList lex(const char *src);
+/* Length of a `[name]` starting at p (brackets included), or 0. It means the
+ * same as {name}: the value of the variable called name. */
+uint32_t  adda_bracket_name(const char *p);
 TokenList lex_range(const char *base, const char *start, const char *end,
                     uint32_t first_line);
 const char *token_kind_name(TokenKind k);

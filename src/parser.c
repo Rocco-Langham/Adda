@@ -241,10 +241,14 @@ static Node *build_template(P *p, const char *s, const char *e, bool quoted,
             continue;
         }
 
-        if (q[0] == '{') {
+        if (q[0] == '{' || adda_bracket_name(q)) {
             const char *close = q + 1;
             int depth = 1;
 
+            if (q[0] == '[') {             /* [name]: the name is the whole hole */
+                close = q + adda_bracket_name(q) - 1;
+                depth = 0;
+            }
             while (close < e && depth > 0) {
                 if (*close == '{') depth++;
                 else if (*close == '}') depth--;
@@ -741,6 +745,21 @@ static Node *parse_while(P *p)
     return n;
 }
 
+/* A place that wants a bare name also takes it as [name]: steps past the
+ * brackets so t[*i] is the word. */
+static void skip_bracket(P *p, uint32_t *i, uint32_t e)
+{
+    if (*i + 2 < e && p->t[*i].kind == TK_LBRACE && p->t[*i].start[0] == '[' &&
+        p->t[*i + 1].kind == TK_WORD && p->t[*i + 2].kind == TK_RBRACE)
+        (*i)++;
+}
+
+/* ...and past the closing one, once the name has been read */
+static void skip_close(P *p, uint32_t *i, uint32_t e)
+{
+    if (*i < e && p->t[*i].kind == TK_RBRACE && p->t[*i].start[0] == ']') (*i)++;
+}
+
 static Node *parse_foreach(P *p)
 {
     uint32_t s = p->i, e = line_end(p, s);
@@ -752,10 +771,12 @@ static Node *parse_foreach(P *p)
     if (!word_at(p, i, "each"))
         adda_error_at(p->t[s].start, line, "write it as: for each <name> in <list>");
     i++;
+    skip_bracket(p, &i, e);
     if (i >= e || p->t[i].kind != TK_WORD)
-        adda_error_at(p->t[s].start, line, "for each needs a name, as in: for each n in nums");
+        adda_error_at(p->t[s].start, line, "for each needs a name, as in: for each [n] in nums");
     n->name = p->t[i].text;
     i++;
+    skip_close(p, &i, e);
     in = find_top(p, i, e, TK_EOF, "in");
     if (in < 0)
         adda_error_at(p->t[s].start, line, "write it as: for each %s in <list>", n->name->bytes);
@@ -794,12 +815,14 @@ static Node *parse_define(P *p)
         i++;
         n->params = adda_alloc(sizeof(Text *) * 16);
         while (i < e) {
+            skip_bracket(p, &i, e);
             if (p->t[i].kind != TK_WORD)
                 adda_error_at(p->t[i].start, p->t[i].line, "this is not a name I can use");
             if (n->nparams == 16)
                 adda_error_at(p->t[i].start, p->t[i].line, "that is too many inputs for one function");
             n->params[n->nparams++] = p->t[i].text;
             i++;
+            skip_close(p, &i, e);
             if (i < e && p->t[i].kind == TK_COMMA) i++;
         }
     }

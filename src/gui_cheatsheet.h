@@ -23,12 +23,16 @@ static const Cheat CHEATS[] = {
   "print Hello, world" },
 
 { "Put a value inside text",
-  "Braces mean the value of. show variable, insert, interpolate",
-  "print Hello, {name}" },
+  "Square brackets around a name mean its value. show variable, insert, interpolate",
+  "print Hello, [name]" },
 
 { "Make a variable",
-  "A bare word is text, a number on its own is a number. set, assign, store",
-  "name = Rocco\r\nage = 30" },
+  "Put the name in square brackets. A bare word is text, a number is a number. set, assign, store",
+  "[name] = Rocco\r\n[age] = 30" },
+
+{ "Maths inside text",
+  "Braces hold a sum; brackets name the variables in it. calculate, insert",
+  "print Next year you will be {[age] + 1}" },
 
 { "Copy a value",
   "A word that names a variable means that variable. duplicate",
@@ -58,11 +62,11 @@ static const Cheat CHEATS[] = {
 /* ---- asking -------------------------------------------------------- */
 { "Ask a question",
   "Reads one line from whoever runs the program. input, read, prompt, entry",
-  "name = ask What is your name?" },
+  "[name] = ask What is your name?\r\nprint Hello, [name]" },
 
 { "Ask for a number",
   "An answer that looks like a number becomes one. input number",
-  "age = ask How old are you?\r\nprint Next year you will be {age + 1}" },
+  "[age] = ask How old are you?\r\nprint Next year you will be {[age] + 1}" },
 
 { "Read a line with no question",
   "ask on its own just waits for a line. input",

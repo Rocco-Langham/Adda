@@ -34,6 +34,33 @@ print Hello {name}, you are {age}
 
 Braces mean **the value of**. That is the only thing they ever mean.
 
+### Square brackets
+
+Square brackets around a name also mean that variable, and they work
+everywhere - setting it, printing it, and in maths:
+
+```adda
+[name] = ask What is your name?
+print Nice to meet you, [name]
+next = [age] + 1
+print Next year you will be {[age] + 1}
+```
+
+`[name]` is exactly the same as `{name}`, so use whichever you like. Brackets
+only count when there is a single name between them, so `print [1, 2]` or
+`print [not a name]` still prints the brackets as text. They work after
+`for each` and in a function's inputs too:
+
+```adda
+for each [n] in list 1, 2, 3
+    print [n]
+end
+
+define greet with [who]
+    print Hi [who]
+end
+```
+
 ## 3. Maths
 
 An operator counts only when it has a space on **both** sides:

@@ -1,6 +1,6 @@
 # The smallest Adda program.
 print Hello, world
 
-# Bare words are just text. To use a value, put it in braces.
-name = Rocco
-print Nice to meet you, {name}
+# Bare words are just text. To use a variable, put its name in [brackets].
+[name] = Rocco
+print Nice to meet you, [name]

@@ -1,0 +1,19 @@
+# [name] means the variable called name, just like {name}.
+[name] = Rocco
+print Nice to meet you, [name].
+[age] = 30
+print Next year: {[age] + 1}
+next = [age] + 1
+print [next] and {next} are the same
+print "in quotes too: [name]"
+print text stays text: [1, 2] and [not a name] and [{name}]
+[things] = list
+add 3 to [things]
+print [things]
+for each [n] in list 1, 2
+    print [n]
+end
+define greet with [who]
+    print Hi [who]
+end
+call greet with [name]

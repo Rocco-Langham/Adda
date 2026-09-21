@@ -16,6 +16,7 @@
  *     prose, and treating `x>=5` as a word would let a comparison silently
  *     become text - the exact failure this design exists to prevent.
  */
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,15 @@ static int spaced_op(const char *src, const char *p, TokenKind *kind)
     return 1;
 }
 
+uint32_t adda_bracket_name(const char *p)
+{
+    const char *q = p + 1;
+    if (p[0] != '[') return 0;
+    if (!(isalpha((unsigned char)*q) || *q == '_')) return 0;
+    while (isalnum((unsigned char)*q) || *q == '_') q++;
+    return (*q == ']') ? (uint32_t)(q + 1 - p) : 0;
+}
+
 /* Where a bare word ends. Note that operator characters are NOT listed: if one
  * were space-delimited, the space would already have ended the word. */
 static bool word_ends_at(const char *p)
@@ -83,6 +93,7 @@ static bool word_ends_at(const char *p)
     if (c == ',' || c == '(' || c == ')' || c == '"' || c == '=') return true;
     if (c == '{' && p[1] != '{') return true;
     if (c == '}' && p[1] != '}') return true;
+    if (adda_bracket_name(p)) return true;
     if (two_char_op(p, &k)) return true;
     return false;
 }
@@ -179,6 +190,19 @@ TokenList lex_range(const char *base, const char *start, const char *end,
 
         if ((n = spaced_op(base, p, &kind)) != 0) {
             t.kind = kind; t.len = (uint32_t)n;
+            emit(&b, t);
+            p += n;
+            continue;
+        }
+
+        /* [name] is {name} spelt another way: the same three tokens */
+        if ((n = adda_bracket_name(p)) != 0) {
+            t.kind = TK_LBRACE; t.len = 1;
+            emit(&b, t);
+            t.kind = TK_WORD; t.start = p + 1; t.len = (uint32_t)n - 2;
+            t.text = intern(p + 1, (uint32_t)n - 2);
+            emit(&b, t);
+            t.kind = TK_RBRACE; t.start = p + n - 1; t.len = 1; t.text = NULL;
             emit(&b, t);
             p += n;
             continue;
