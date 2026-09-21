@@ -558,7 +558,7 @@ const char *const ADDA_SHAPE_NAMES[SHAPE_COUNT] = {
     "triangle", "diamond", "hexagon", "star", "line"
 };
 
-void adda_shape_rect(int kind, const double in[4], double W, double H, double out[4])
+void adda_shape_rect(int kind, const double in[SHAPE_SPEC], double W, double H, double out[4])
 {
     /* round and pointed shapes start square; boxes, pills and ovals wide */
     bool square = kind == SHAPE_CIRCLE || kind == SHAPE_TRIANGLE ||
@@ -567,16 +567,15 @@ void adda_shape_rect(int kind, const double in[4], double W, double H, double ou
     const double defH = kind == SHAPE_LINE ? 0 : 100;   /* a line lies flat */
     double x, y, w, h;
     double l = in[SIDE_LEFT], r = in[SIDE_RIGHT], t = in[SIDE_TOP], b = in[SIDE_BOTTOM];
+    double gw = in[SHAPE_WIDTH], gh = in[SHAPE_HEIGHT];
 
-    if (l >= 0 && r >= 0)  { x = l; w = W - l - r; }
-    else if (l >= 0)       { x = l; w = defW; }
-    else if (r >= 0)       { w = defW; x = W - r - w; }
-    else                   { w = defW; x = (W - w) / 2; }
+    /* the size: as given, else stretched between both sides, else the default */
+    w = gw >= 0 ? gw : (l >= 0 && r >= 0) ? W - l - r : defW;
+    h = gh >= 0 ? gh : (t >= 0 && b >= 0) ? H - t - b : defH;
 
-    if (t >= 0 && b >= 0)  { y = t; h = H - t - b; }
-    else if (t >= 0)       { y = t; h = defH; }
-    else if (b >= 0)       { h = defH; y = H - b - h; }
-    else                   { h = defH; y = (H - h) / 2; }
+    /* then where it sits: from the side that has a distance, else centred */
+    x = l >= 0 ? l : r >= 0 ? W - r - w : (W - w) / 2;
+    y = t >= 0 ? t : b >= 0 ? H - b - h : (H - h) / 2;
 
     out[0] = x; out[1] = y;
     out[2] = w > 0 ? w : 0;
@@ -647,12 +646,12 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             return FLOW_NORMAL;
 
         case N_SHAPE: {
-            double inset[4];
+            double spec[SHAPE_SPEC];
             int k;
             if (!adda_window_is_open())
                 adda_error(n->line, "insert draws in the app window - put openApplication before it");
-            for (k = 0; k < 4; k++) inset[k] = n->kids[k]->number;
-            adda_window_shape(n->op, inset);
+            for (k = 0; k < SHAPE_SPEC; k++) spec[k] = n->kids[k]->number;
+            adda_window_shape(n->op, spec);
             return FLOW_NORMAL;
         }
 

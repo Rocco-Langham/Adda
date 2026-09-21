@@ -1,0 +1,4 @@
+tests/errors/insert_bad_height.adda:3: write the size in px, as in: height = 25px
+     3 | height = tall
+       | ^
+exit: 65

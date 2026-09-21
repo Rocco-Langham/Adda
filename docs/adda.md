@@ -281,6 +281,18 @@ the side you did give - and a box with neither of a pair is centred that way.
 Because shapes are measured from the edges, they stretch when the window is
 resized.
 
+To set a size exactly, add a `height` or `width` line:
+
+```adda
+insert box
+15px top,left,right
+height = 25px
+```
+
+That is a strip 25px tall, 15px in from the top, left and right. A given size
+always wins; the shape is placed from whichever side has a distance (the top
+here), or centred when neither does. `width = 300px` works the same way across.
+
 The shapes are:
 
 | Shape | What it looks like |

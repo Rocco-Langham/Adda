@@ -809,17 +809,31 @@ static Node *parse_insert(P *p)
         adda_error_at(p->t[s].start, line,
                       "insert what? The shapes are: box, rounded box, pill, circle, oval, "
                       "triangle, diamond, hexagon, star and line - the cheat sheet has them all");
-    for (k = 0; k < 4; k++) {
+    for (k = 0; k < SHAPE_SPEC; k++) {
         Node *side = node(N_NUMBER, line);
         side->number = -1;                  /* not given */
         add_kid(n, side);
     }
     end_line(p, e);
 
-    /* the lines straight after it that start with a distance, like 3px */
+    /* the lines straight after it: distances like 3px top,left, and a size
+     * like height = 25px */
     for (;;) {
-        double px;
+        double px = 0;
         uint32_t i = p->i, le;
+        if (i < p->n && (word_at(p, i, "height") || word_at(p, i, "width"))) {
+            int which = word_at(p, i, "height") ? SHAPE_HEIGHT : SHAPE_WIDTH;
+            uint32_t v = i + 1;
+            le = line_end(p, i);
+            if (v < le && p->t[v].kind == TK_ASSIGN) v++;
+            if (v + 1 != le || !px_word(&p->t[v], &px))
+                adda_error_at(p->t[i].start, p->t[i].line,
+                              "write the size in px, as in: %.*s = 25px",
+                              (int)p->t[i].len, p->t[i].start);
+            n->kids[which]->number = px;
+            end_line(p, le);
+            continue;
+        }
         if (i >= p->n || !px_word(&p->t[i], &px)) break;
         le = line_end(p, i);
         i++;

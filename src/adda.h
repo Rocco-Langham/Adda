@@ -191,13 +191,17 @@ void adda_window_run(void);            /* at the end: wait for it to close */
 enum { SHAPE_BOX, SHAPE_ROUNDED_BOX, SHAPE_PILL, SHAPE_CIRCLE, SHAPE_OVAL,
        SHAPE_TRIANGLE, SHAPE_DIAMOND, SHAPE_HEXAGON, SHAPE_STAR, SHAPE_LINE,
        SHAPE_COUNT };
-enum { SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM, SIDE_LEFT };
+/* A shape's spec: its distance from each edge, then an exact width and height.
+ * A negative entry means it was not given. */
+enum { SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM, SIDE_LEFT, SHAPE_WIDTH, SHAPE_HEIGHT,
+       SHAPE_SPEC };
 extern const char *const ADDA_SHAPE_NAMES[SHAPE_COUNT];   /* "rounded box", ... */
-void adda_window_shape(int kind, const double inset[4]);
+void adda_window_shape(int kind, const double spec[SHAPE_SPEC]);
 /* Where a shape sits in a W x H window: x, y, width, height into `out`. A
- * side with no distance gives a default size, measured from the side that
- * has one, or centred when neither does. Shared by every platform. */
-void adda_shape_rect(int kind, const double inset[4], double W, double H, double out[4]);
+ * given width or height is used as it is; otherwise both sides of a pair
+ * decide the size, or it takes a default. It is then placed from the side
+ * that has a distance, or centred when neither does. Shared by every platform. */
+void adda_shape_rect(int kind, const double spec[SHAPE_SPEC], double W, double H, double out[4]);
 /* The corners of the pointed shapes (triangle, diamond, hexagon, star) inside
  * the box `r` from adda_shape_rect, as x,y pairs into `xy`; returns how many
  * corners, or 0 for a shape drawn some other way. At most 10. */

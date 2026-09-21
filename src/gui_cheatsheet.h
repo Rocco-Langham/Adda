@@ -230,6 +230,10 @@ static const Cheat SHAPE_CHEATS[] = {
   "A box whose ends are fully round. capsule, button, lozenge",
   "insert pill\r\n20px left,right\r\n40px bottom" },
 
+{ "Set a shape's height or width",
+  "A size line after the distances. Size wins; the edges say where it sits. tall, wide, size, strip, bar",
+  "insert box\r\n15px top,left,right\r\nheight = 25px" },
+
 { "Circle",
   "The biggest circle that fits its space; 100px across on its own. round, dot, ball",
   "insert circle" },

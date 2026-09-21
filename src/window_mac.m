@@ -42,11 +42,11 @@ static bool        g_closed;
 
     /* shapes first, so the text sits on top of them */
     for (NSArray<NSNumber *> *sh in self.shapes) {
-        double in[4], r[4], xy[20];
+        double in[SHAPE_SPEC], r[4], xy[20];
         int k, kind = sh[0].intValue, corners;
         NSRect box;
         NSBezierPath *path;
-        for (k = 0; k < 4; k++) in[k] = sh[(NSUInteger)k + 1].doubleValue;
+        for (k = 0; k < SHAPE_SPEC; k++) in[k] = sh[(NSUInteger)k + 1].doubleValue;
         adda_shape_rect(kind, in, NSWidth(self.bounds), NSHeight(self.bounds), r);
         box = NSMakeRect(r[0], r[1], r[2], r[3]);
 
@@ -177,9 +177,12 @@ void adda_window_print(const char *text, size_t len)
     pump([NSDate date]);
 }
 
-void adda_window_shape(int kind, const double inset[4])
+void adda_window_shape(int kind, const double spec[SHAPE_SPEC])
 {
-    [g_canvas.shapes addObject:@[ @(kind), @(inset[0]), @(inset[1]), @(inset[2]), @(inset[3]) ]];
+    NSMutableArray<NSNumber *> *sh = [NSMutableArray arrayWithObject:@(kind)];
+    int k;
+    for (k = 0; k < SHAPE_SPEC; k++) [sh addObject:@(spec[k])];
+    [g_canvas.shapes addObject:sh];
     g_canvas.needsDisplay = YES;
     [g_canvas displayIfNeeded];
     pump([NSDate date]);

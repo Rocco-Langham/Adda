@@ -14,7 +14,7 @@ static char *g_text;            /* every printed line, joined with \r\n */
 static size_t g_len;
 static HFONT g_font;
 
-typedef struct { int kind; double inset[4]; } Shape;
+typedef struct { int kind; double inset[SHAPE_SPEC]; } Shape;
 static Shape *g_shapes;
 static int    g_shapeCount;
 
@@ -166,7 +166,7 @@ void adda_window_print(const char *text, size_t len)
     pump();
 }
 
-void adda_window_shape(int kind, const double inset[4])
+void adda_window_shape(int kind, const double inset[SHAPE_SPEC])
 {
     Shape *grown = realloc(g_shapes, sizeof *g_shapes * (size_t)(g_shapeCount + 1));
     if (!grown) return;
