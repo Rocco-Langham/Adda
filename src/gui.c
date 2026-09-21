@@ -216,7 +216,7 @@ static int  g_renameIdx = -1;
 #define IDM_DELETE 3002
 
 /* ── cheat sheet filtering ───────────────────────────────────────── */
-static int g_cheatShown[CHEAT_MAX];
+static const Cheat *g_cheatShown[CHEAT_MAX];
 static BOOL g_cheatTurned;          /* the last click followed a link */
 static int g_cheatCount;
 
@@ -2323,32 +2323,45 @@ static void refresh_cheats(void)
     if (hwndCheatFind) GetWindowTextA(hwndCheatFind, needle, sizeof(needle));
 
     g_cheatCount = 0;
-    for (i = 0; i < CUR_CHEAT_COUNT; i++) {
-        if (!needle[0] ||
-            has_text(CUR_CHEATS[i].title, needle) ||
-            has_text(CUR_CHEATS[i].about, needle) ||
-            has_text(CUR_CHEATS[i].snippet, needle))
-            g_cheatShown[g_cheatCount++] = i;
+    if (g_cheatPage == 0 && needle[0]) {
+        /* searching from the list of topics looks through every topic */
+        int pg;
+        for (pg = 1; pg < CHEAT_PAGE_COUNT; pg++)
+            for (i = 0; i < CHEAT_PAGE_SIZES[pg]; i++) {
+                const Cheat *c = &CHEAT_PAGES[pg][i];
+                if (c->snippet && (has_text(c->title, needle) || has_text(c->about, needle) ||
+                                   has_text(c->snippet, needle)))
+                    g_cheatShown[g_cheatCount++] = c;
+            }
+    } else {
+        for (i = 0; i < CHEAT_PAGE_SIZES[g_cheatPage]; i++) {
+            const Cheat *c = &CHEAT_PAGES[g_cheatPage][i];
+            if (!needle[0] || !c->snippet ||      /* the way back always shows */
+                has_text(c->title, needle) || has_text(c->about, needle) ||
+                has_text(c->snippet, needle))
+                g_cheatShown[g_cheatCount++] = c;
+        }
     }
 
     if (!hwndCheatList) return;
     SendMessageA(hwndCheatList, LB_RESETCONTENT, 0, 0);
     for (i = 0; i < g_cheatCount; i++)
         SendMessageA(hwndCheatList, LB_ADDSTRING, 0,
-                     (LPARAM)CUR_CHEATS[g_cheatShown[i]].title);
+                     (LPARAM)g_cheatShown[i]->title);
     if (g_cheatCount) SendMessageA(hwndCheatList, LB_SETCURSEL, 0, 0);
 }
 
 static void insert_cheat(int shownIndex)
 {
     if (shownIndex < 0 || shownIndex >= g_cheatCount) return;
-    if (!CUR_CHEATS[g_cheatShown[shownIndex]].snippet) {   /* a link: turn the page */
-        g_cheatPage = !g_cheatPage;
+    if (!g_cheatShown[shownIndex]->snippet) {   /* a link: turn the page */
+        g_cheatPage = g_cheatShown[shownIndex]->page;
+        if (hwndCheatFind) SetWindowTextA(hwndCheatFind, "");   /* a new page starts unfiltered */
         refresh_cheats();
         return;
     }
     SendMessageA(hwndCode, EM_REPLACESEL, TRUE,
-                 (LPARAM)CUR_CHEATS[g_cheatShown[shownIndex]].snippet);
+                 (LPARAM)g_cheatShown[shownIndex]->snippet);
     SetFocus(hwndCode);
 }
 
@@ -2363,7 +2376,7 @@ static void draw_cheat_item(DRAWITEMSTRUCT *di)
         fill_rect(di->hDC, r, g_t.surface);
         return;
     }
-    c = &CUR_CHEATS[g_cheatShown[di->itemID]];
+    c = g_cheatShown[di->itemID];
 
     fill_rect(di->hDC, r, g_t.surface);
     if (selected) {
@@ -2445,7 +2458,7 @@ static LRESULT CALLBACK CheatsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
             GetKeyState(VK_LBUTTON) < 0) {
             int at = (int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0);
             g_cheatTurned = FALSE;
-            if (at >= 0 && at < g_cheatCount && !CUR_CHEATS[g_cheatShown[at]].snippet) {
+            if (at >= 0 && at < g_cheatCount && !g_cheatShown[at]->snippet) {
                 insert_cheat(at);
                 g_cheatTurned = TRUE;
             }

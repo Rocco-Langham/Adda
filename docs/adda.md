@@ -310,7 +310,7 @@ The shapes are:
 
 The round and pointed ones (circle, triangle, diamond, hexagon, star) start
 100px square rather than 200px wide. A `line` given only a top lies flat.
-In the window's cheat sheet, **All shapes ->** opens a page with every one.
+In the cheat sheet, the **Shapes** topic has every one.
 
 ## 8. Functions
 
@@ -548,7 +548,7 @@ Down the left side:
 | Explorer | Lists the `.adda` files beside the program and in `examples/`. Click one to open it. |
 | Search | Finds text in your code; Enter jumps to the next match. |
 | New Project | Asks where to save a new project and what to call it, then makes that folder with `first.adda` and `style.adda` in it and shows it in the Explorer. |
-| Cheat sheet | Everything in this guide as searchable one-liners. Double-click one to put the code into your program. |
+| Cheat sheet | Everything in this guide as one-liners, grouped into topics. Click a topic to open its page, and **<- Back to all topics** to return. Typing in the search box on the topics page searches every topic. Double-click an entry to put its code into your program. |
 | Settings | **Themes**: Follow Windows, Light, Dark, Beige, or Abyss. |
 
 Along the bottom of the Explorer, **Save** writes your code wherever you choose,

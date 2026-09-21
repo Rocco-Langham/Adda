@@ -251,7 +251,7 @@ static NSRect g_barRect[BAR_COUNT];
 static int    g_barHot = -1;
 
 /* ── cheat sheet filtering ───────────────────────────────────────── */
-static int g_cheatShown[CHEAT_MAX];
+static const Cheat *g_cheatShown[CHEAT_MAX];
 static BOOL g_cheatTurned;          /* the last click followed a link */
 static int g_cheatCount;
 
@@ -1851,12 +1851,24 @@ static void refresh_cheats(void)
     int i;
 
     g_cheatCount = 0;
-    for (i = 0; i < CUR_CHEAT_COUNT; i++) {
-        if (!needle[0] ||
-            has_text(CUR_CHEATS[i].title, needle) ||
-            has_text(CUR_CHEATS[i].about, needle) ||
-            has_text(CUR_CHEATS[i].snippet, needle))
-            g_cheatShown[g_cheatCount++] = i;
+    if (g_cheatPage == 0 && needle[0]) {
+        /* searching from the list of topics looks through every topic */
+        int pg;
+        for (pg = 1; pg < CHEAT_PAGE_COUNT; pg++)
+            for (i = 0; i < CHEAT_PAGE_SIZES[pg]; i++) {
+                const Cheat *c = &CHEAT_PAGES[pg][i];
+                if (c->snippet && (has_text(c->title, needle) || has_text(c->about, needle) ||
+                                   has_text(c->snippet, needle)))
+                    g_cheatShown[g_cheatCount++] = c;
+            }
+    } else {
+        for (i = 0; i < CHEAT_PAGE_SIZES[g_cheatPage]; i++) {
+            const Cheat *c = &CHEAT_PAGES[g_cheatPage][i];
+            if (!needle[0] || !c->snippet ||      /* the way back always shows */
+                has_text(c->title, needle) || has_text(c->about, needle) ||
+                has_text(c->snippet, needle))
+                g_cheatShown[g_cheatCount++] = c;
+        }
     }
 
     if (!g_cheatList) return;
@@ -1873,14 +1885,15 @@ static void insert_cheat(NSInteger shownIndex)
     NSRange r;
 
     if (shownIndex < 0 || shownIndex >= g_cheatCount) return;
-    if (!CUR_CHEATS[g_cheatShown[shownIndex]].snippet) {   /* a link: turn the page */
-        g_cheatPage = !g_cheatPage;
+    if (!g_cheatShown[shownIndex]->snippet) {   /* a link: turn the page */
+        g_cheatPage = g_cheatShown[shownIndex]->page;
+        if (g_cheatFind) g_cheatFind.stringValue = @"";   /* a new page starts unfiltered */
         refresh_cheats();
         return;
     }
 
     /* the snippets carry \r\n for the Windows EDIT control */
-    snip = [@(CUR_CHEATS[g_cheatShown[shownIndex]].snippet)
+    snip = [@(g_cheatShown[shownIndex]->snippet)
                stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"];
 
     /* through shouldChange/didChange, so Cmd+Z can take it back out */
@@ -2956,7 +2969,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     NSInteger row = g_cheatList.clickedRow;
     (void)sender;
     g_cheatTurned = NO;
-    if (row >= 0 && row < g_cheatCount && !CUR_CHEATS[g_cheatShown[row]].snippet) {
+    if (row >= 0 && row < g_cheatCount && !g_cheatShown[row]->snippet) {
         insert_cheat(row);
         g_cheatTurned = YES;
     }
@@ -3174,10 +3187,10 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     Cell *c = make_cell(tv, YES);
 
     (void)column;
-    c.textField.stringValue = @(CUR_CHEATS[g_cheatShown[row]].title);
+    c.textField.stringValue = @(g_cheatShown[row]->title);
     c.textField.font = g_fontUIBold;
     c.textField.textColor = col(g_t.text);
-    c.sub.stringValue = @(CUR_CHEATS[g_cheatShown[row]].about);
+    c.sub.stringValue = @(g_cheatShown[row]->about);
     c.sub.font = g_fontSmall;
     c.sub.textColor = col(g_t.muted);
     return c;
