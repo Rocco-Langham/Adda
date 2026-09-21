@@ -145,13 +145,13 @@ static int    g_dpi = 96;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR,
-       ICON_SAVE, ICON_IMPORT, ICON_CHECK };
-/* Run and Stop sit under Search; Check, Cheat sheet and Settings are pinned
+       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW };
+/* New project, Run and Stop sit under Search; Check, Cheat sheet and Settings are pinned
  * to the bottom. Everything before AB_CHECK stacks from the top. */
-enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
+enum { AB_EXPLORER = 0, AB_SEARCH, AB_NEW, AB_RUN, AB_STOP, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
 
 static const int AB_ICON[AB_COUNT] = {
-    ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHECK, ICON_CHEAT, ICON_GEAR
+    ICON_EXPLORER, ICON_SEARCH, ICON_NEW, ICON_PLAY, ICON_STOP, ICON_CHECK, ICON_CHEAT, ICON_GEAR
 };
 
 static int  g_view = AB_EXPLORER;   /* which panel view, or -1 when collapsed */
@@ -513,6 +513,20 @@ static void icon_shape(HDC dc, int kind, int side, COLORREF fg, COLORREF bg)
         break;
     }
 
+    case ICON_NEW: {
+        /* a folder with a plus on it */
+        POINT folder[6], plus[2];
+        folder[0] = NP(10, 24, side); folder[1] = NP(38, 24, side);
+        folder[2] = NP(46, 34, side); folder[3] = NP(90, 34, side);
+        folder[4] = NP(90, 82, side); folder[5] = NP(10, 82, side);
+        Polygon(dc, folder, 6);
+        plus[0] = NP(50, 46, side); plus[1] = NP(50, 72, side);
+        Polyline(dc, plus, 2);
+        plus[0] = NP(37, 59, side); plus[1] = NP(63, 59, side);
+        Polyline(dc, plus, 2);
+        break;
+    }
+
     case ICON_CHECK: {
         /* a warning triangle with a ! in it */
         POINT tri[3], bang[2];
@@ -706,6 +720,10 @@ static void get_adda_path(char *buf, int size)
     strncat(buf, "adda.exe", size - (int)strlen(buf) - 1);
 }
 
+/* the project folder New Project made, with a trailing backslash; empty
+ * until then, when the Explorer looks beside the exe */
+static char g_projectDir[MAX_PATH + 2];
+
 static void exe_dir(char *buf, int size)
 {
     char *sep;
@@ -714,6 +732,13 @@ static void exe_dir(char *buf, int size)
     sep = strrchr(buf, '\\');
     if (sep) *(sep + 1) = '\0';
     else     buf[0] = '\0';
+}
+
+/* where the Explorer looks, and where Import and Save As start */
+static void explorer_dir(char *buf, int size)
+{
+    if (g_projectDir[0]) snprintf(buf, (size_t)size, "%s", g_projectDir);
+    else exe_dir(buf, size);
 }
 
 /* ── console text ────────────────────────────────────────────────── */
@@ -1159,8 +1184,10 @@ static void rescan_files(void)
 
     g_importOnly = FALSE;
     g_fileCount = 0;
-    exe_dir(dir, sizeof(dir));
+    explorer_dir(dir, sizeof(dir));
     scan_dir(dir);
+
+    if (g_projectDir[0]) goto fill;        /* a project is just its own folder */
 
     snprintf(sub, sizeof(sub), "%sexamples\\", dir);
     scan_dir(sub);
@@ -1169,6 +1196,7 @@ static void rescan_files(void)
     snprintf(sub, sizeof(sub), "%s..\\examples\\", dir);
     scan_dir(sub);
 
+fill:
     if (!hwndFiles) return;
     SendMessageA(hwndFiles, LB_RESETCONTENT, 0, 0);
     for (i = 0; i < g_fileCount; i++)
@@ -1904,7 +1932,7 @@ static void paint_main(HWND hwnd, HDC hdc)
         else if (i == AB_STOP)           /* something is running: make it obvious */
             fg = g_t.abIcon;
 
-        if (i == AB_RUN) {               /* a hairline between views and actions */
+        if (i == AB_NEW) {               /* a hairline between views and actions */
             RECT sep = box;
             sep.left += S(12); sep.right -= S(12);
             sep.top -= S(3); sep.bottom = sep.top + 1;
@@ -2538,7 +2566,7 @@ static void save_as(HWND hwnd)
 
     if (sel >= 0 && sel < g_fileCount)
         snprintf(path, sizeof path, "%s", g_files[sel].name);
-    exe_dir(dir, sizeof dir);
+    explorer_dir(dir, sizeof dir);
 
     ZeroMemory(&ofn, sizeof ofn);
     ofn.lStructSize = sizeof ofn;
@@ -2596,7 +2624,7 @@ static void import_files(HWND hwnd)
                 OFN_NOCHANGEDIR;
     if (!GetOpenFileNameA(&ofn)) return;
 
-    exe_dir(dir, sizeof dir);
+    explorer_dir(dir, sizeof dir);
 
     /* One file: the full path, with nFileOffset pointing at its name.
      * Several: the folder, then each name, each ended by a NUL and the list
@@ -2657,6 +2685,78 @@ static void import_files(HWND hwnd)
                     "Import", MB_OK | MB_ICONWARNING);
 }
 
+/* ═══════════════════════════════════════════════ new project ══ */
+
+static const char FIRST_ADDA[] =
+    "# first.adda - your program starts here.\n"
+    "[name] = ask What is your name?\n"
+    "print Hello, [name]\n";
+
+static const char STYLE_ADDA[] =
+    "# style.adda - a second file for this project.\n";
+
+static BOOL write_text(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "wb");
+    BOOL ok;
+    if (!f) return FALSE;
+    ok = fputs(text, f) >= 0;
+    return (fclose(f) == 0) && ok;
+}
+
+/* Asks where to save the new project, makes a folder of that name there with
+ * first.adda and style.adda in it, points the Explorer at it and opens
+ * first.adda. */
+static void new_project(HWND hwnd)
+{
+    OPENFILENAMEA ofn;
+    char path[MAX_PATH] = "My Project", file[MAX_PATH * 2];
+    size_t n;
+
+    ZeroMemory(&ofn, sizeof ofn);
+    ofn.lStructSize = sizeof ofn;
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = "Project folder\0*.\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = sizeof path;
+    ofn.lpstrTitle = "New Project - choose where to save it and name it";
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameA(&ofn)) return;
+
+    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) {
+        MessageBoxA(hwnd, "There is already something with that name there.\n"
+                          "Pick another name for the project.",
+                    "New Project", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (!CreateDirectoryA(path, NULL)) {
+        MessageBoxA(hwnd, "Windows would not create the project folder there.",
+                    "New Project", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    n = strlen(path);
+    snprintf(g_projectDir, sizeof g_projectDir, "%s%s", path,
+             (n && path[n - 1] == '\\') ? "" : "\\");
+    {
+        BOOL ok;
+        snprintf(file, sizeof file, "%sfirst.adda", g_projectDir);
+        ok = write_text(file, FIRST_ADDA);
+        snprintf(file, sizeof file, "%sstyle.adda", g_projectDir);
+        ok = write_text(file, STYLE_ADDA) && ok;
+        if (!ok)
+            MessageBoxA(hwnd, "Windows would not write the project's files.",
+                        "New Project", MB_OK | MB_ICONWARNING);
+    }
+
+    g_view = AB_EXPLORER;
+    layout(hwnd);
+    rescan_files();
+    select_by_name("first.adda");
+    open_file((int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0));
+    InvalidateRect(hwnd, NULL, TRUE);
+}
+
 static int ab_hit(POINT p)
 {
     int i;
@@ -2675,6 +2775,9 @@ static void ab_click(HWND hwnd, int item)
         layout(hwnd);
         InvalidateRect(hwnd, NULL, TRUE);
         if (g_view == AB_SEARCH) SetFocus(hwndFind);
+        break;
+    case AB_NEW:
+        new_project(hwnd);
         break;
     case AB_RUN:
         if (!g_running) run_code(hwnd);
@@ -2759,8 +2862,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         rescan_files();
 
         SetWindowTextA(hwndCode,
-            "name = ask What is your name?\r\n"
-            "print Hello, {name}");
+            "[name] = ask What is your name?\r\n"
+            "print Hello, [name]");
         return 0;
     }
 

@@ -190,18 +190,18 @@ static NSFont *g_fontMono, *g_fontUI, *g_fontUIBold, *g_fontSmall;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR, ICON_PLUS,
-       ICON_SAVE, ICON_IMPORT, ICON_CHECK };
+       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW };
 /* Run and Stop sit under Search; Cheat sheet and Settings are pinned to the
  * bottom. Everything before AB_CHEAT stacks from the top. */
-enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
+enum { AB_EXPLORER = 0, AB_SEARCH, AB_NEW, AB_RUN, AB_STOP, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
 
 static const int AB_ICON[AB_COUNT] = {
-    ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHECK, ICON_CHEAT, ICON_GEAR
+    ICON_EXPLORER, ICON_SEARCH, ICON_NEW, ICON_PLAY, ICON_STOP, ICON_CHECK, ICON_CHEAT, ICON_GEAR
 };
 
 /* addToolTipRect keeps no reference to its owner, so these must be literals */
 static NSString *const AB_TIP[AB_COUNT] = {
-    @"Explorer", @"Search", @"Run  ⌘R", @"Stop  ⌘.", @"Check for mistakes", @"Cheat sheet", @"Settings"
+    @"Explorer", @"Search", @"New Project", @"Run  ⌘R", @"Stop  ⌘.", @"Check for mistakes", @"Cheat sheet", @"Settings"
 };
 
 static int    g_view = AB_EXPLORER;   /* which panel view, or -1 when collapsed */
@@ -235,7 +235,7 @@ static NSMutableData *g_inq;          /* typed input the pipe has not taken yet 
  * at a time, and an NSString path serves as the item itself - two paths that
  * read the same ARE the same row, which is what lets a plain reloadData keep
  * whichever folders are open. */
-static NSString *g_home;              /* the Explorer's root; set once at launch */
+static NSString *g_home;              /* the Explorer's root: beside the app, or a new project */
 static NSMutableDictionary<NSString *, NSArray<NSString *> *> *g_treeCache;
 static NSString *g_renamePath;        /* non-nil while a row is being renamed */
 static BOOL      g_renameCommit;
@@ -262,6 +262,7 @@ static void refresh_cheats(void);
 static void insert_cheat(NSInteger shownIndex);
 static void run_code(void);
 static void check_code(void);
+static void new_project(void);
 static void clear_check(void);
 static void stop_code(void);
 static void send_line(void);
@@ -583,6 +584,17 @@ static void draw_icon(NSRect box, int kind, unsigned fgc, unsigned bgc)
         ink(shape(b, tray, 4, NO), stroke, fg, bg, NO);
         ink(shape(b, shaft, 2, NO), stroke, fg, bg, NO);
         ink(shape(b, head, 3, NO), stroke, fg, bg, NO);
+        break;
+    }
+
+    case ICON_NEW: {
+        /* a folder with a plus on it */
+        static const CGFloat folder[] = { 10,24, 38,24, 46,34, 90,34, 90,82, 10,82 };
+        static const CGFloat v[] = { 50,46, 50,72 };
+        static const CGFloat h[] = { 37,59, 63,59 };
+        ink(shape(b, folder, 6, YES), stroke, fg, bg, YES);
+        ink(shape(b, v, 2, NO), stroke, fg, bg, NO);
+        ink(shape(b, h, 2, NO), stroke, fg, bg, NO);
         break;
     }
 
@@ -1434,6 +1446,58 @@ static void import_files(void)
     }];
 }
 
+/* ═══════════════════════════════════════════════════ new project ══ */
+
+/* Asks where to save the new project, makes a folder of that name there with
+ * first.adda and style.adda in it, points the Explorer at it and opens
+ * first.adda. */
+static void new_project(void)
+{
+    NSSavePanel *panel = [NSSavePanel savePanel];
+
+    panel.title = @"New Project";
+    panel.message = @"Choose where to save the new project, and give it a name.";
+    panel.prompt = @"Create";
+    panel.nameFieldLabel = @"Project:";
+    panel.nameFieldStringValue = @"My Project";
+    panel.canCreateDirectories = YES;
+
+    [panel beginSheetModalForWindow:g_win completionHandler:^(NSModalResponse r) {
+        NSFileManager *fm = NSFileManager.defaultManager;
+        NSString *dir = panel.URL.path, *first, *style;
+        BOOL ok;
+
+        if (r != NSModalResponseOK) return;
+        if ([fm fileExistsAtPath:dir]) {
+            warn(@"There is already something with that name there.\n"
+                 @"Pick another name for the project.");
+            return;
+        }
+        if (![fm createDirectoryAtPath:dir withIntermediateDirectories:NO
+                            attributes:nil error:NULL]) {
+            warn(@"The Mac would not create the project folder there.");
+            return;
+        }
+        first = [dir stringByAppendingPathComponent:@"first.adda"];
+        style = [dir stringByAppendingPathComponent:@"style.adda"];
+        ok = [@"# first.adda - your program starts here.\n"
+              @"[name] = ask What is your name?\n"
+              @"print Hello, [name]\n"
+                writeToFile:first atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        ok = [@"# style.adda - a second file for this project.\n"
+                writeToFile:style atomically:YES encoding:NSUTF8StringEncoding error:NULL] && ok;
+        if (!ok) warn(@"The Mac would not write the project's files.");
+
+        g_home = dir;
+        g_view = AB_EXPLORER;
+        rescan_files();
+        layout();
+        select_by_path(first);
+        open_file(first);
+        g_win.title = [NSString stringWithFormat:@"Adda - %@", dir.lastPathComponent];
+    }];
+}
+
 /* ═══════════════════════════════════════════════════ searching ══ */
 
 static void find_in_code(BOOL forward)
@@ -1577,7 +1641,7 @@ static void paint_main(void)
         else if (i == AB_STOP)          /* something is running: make it obvious */
             fg = g_t.abIcon;
 
-        if (i == AB_RUN)                /* a hairline between views and actions */
+        if (i == AB_NEW)                /* a hairline between views and actions */
             fill_rect(NSMakeRect(NSMinX(box) + 12, NSMinY(box) - 3, NSWidth(box) - 24, 1),
                       g_t.abIconDim);
 
@@ -1902,6 +1966,9 @@ static void ab_click(int item)
         layout();
         if (g_view == AB_SEARCH) [g_win makeFirstResponder:g_find];
         break;
+    case AB_NEW:
+        new_project();
+        break;
     case AB_RUN:
         if (!g_running) run_code();
         break;
@@ -2034,8 +2101,8 @@ static void build_window(void)
     [g_main addSubview:g_codeScroll];
     [g_main addSubview:g_consoleScroll];
 
-    g_code.string = @"name = ask What is your name?\n"
-                    @"print Hello, {name}";
+    g_code.string = @"[name] = ask What is your name?\n"
+                    @"print Hello, [name]";
 
     apply_theme();
     layout();
