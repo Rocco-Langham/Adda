@@ -32,6 +32,7 @@
 #include <commctrl.h>
 #include <dwmapi.h>
 #include <uxtheme.h>
+#include <commdlg.h>      /* the Save As and Open dialogs */
 #include <shellapi.h>     /* SHFileOperation, so deleting goes to the bin */
 #include <ctype.h>
 #include <math.h>
@@ -143,7 +144,8 @@ static HFONT  hFontMono, hFontUI, hFontUIBold, hFontSmall;
 static int    g_dpi = 96;
 
 /* ── activity bar ────────────────────────────────────────────────── */
-enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR };
+enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR,
+       ICON_SAVE, ICON_IMPORT };
 /* Run and Stop sit under Search; Cheat sheet and Settings are pinned to the
  * bottom. Everything before AB_CHEAT stacks from the top. */
 enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHEAT, AB_GEAR, AB_COUNT };
@@ -163,6 +165,13 @@ static DWORD g_abPressAt;
 static int   g_rowPress = -1;       /* settings row being animated         */
 static DWORD g_rowPressAt;
 static RECT g_abRect[AB_COUNT];
+
+/* the Save and Import buttons along the bottom of the Explorer */
+enum { BAR_SAVE, BAR_IMPORT, BAR_COUNT };
+static RECT  g_barRect[BAR_COUNT];
+static int   g_barHot = -1;
+static int   g_barPress = -1;
+static DWORD g_barPressAt;
 
 /* ── panes ───────────────────────────────────────────────────────── */
 static double g_split = 0.52;       /* share of the editor area given to code */
@@ -475,6 +484,37 @@ static void icon_shape(HDC dc, int kind, int side, COLORREF fg, COLORREF bg)
         gear_path(teeth, side, c, c);
         Polygon(dc, teeth, 32);
         Ellipse(dc, c - hole, c - hole, c + hole, c + hole);
+        break;
+    }
+
+    case ICON_SAVE: {
+        /* a floppy disk: the body with a clipped corner, the shutter at the
+         * top and the label panel at the bottom */
+        POINT body[5], shut[4], label[4];
+        body[0] = NP(18, 14, side); body[1] = NP(72, 14, side);
+        body[2] = NP(86, 28, side); body[3] = NP(86, 86, side);
+        body[4] = NP(18, 86, side);
+        Polygon(dc, body, 5);
+        shut[0] = NP(32, 14, side); shut[1] = NP(32, 36, side);
+        shut[2] = NP(64, 36, side); shut[3] = NP(64, 14, side);
+        Polyline(dc, shut, 4);
+        label[0] = NP(30, 86, side); label[1] = NP(30, 60, side);
+        label[2] = NP(74, 60, side); label[3] = NP(74, 86, side);
+        Polyline(dc, label, 4);
+        break;
+    }
+
+    case ICON_IMPORT: {
+        /* an arrow coming down into a tray */
+        POINT tray[4], shaft[2], head[3];
+        tray[0] = NP(14, 58, side); tray[1] = NP(14, 86, side);
+        tray[2] = NP(86, 86, side); tray[3] = NP(86, 58, side);
+        Polyline(dc, tray, 4);
+        shaft[0] = NP(50, 12, side); shaft[1] = NP(50, 64, side);
+        Polyline(dc, shaft, 2);
+        head[0] = NP(32, 46, side); head[1] = NP(50, 64, side);
+        head[2] = NP(68, 46, side);
+        Polyline(dc, head, 3);
         break;
     }
 
@@ -1485,7 +1525,16 @@ static void layout(HWND hwnd)
 
     if (g_view == AB_EXPLORER) {
         dwp = move_child(dwp, hwndFiles, abW + S(8), S(40),
-                         panelW - S(16), rc.bottom - S(48), SWP_SHOWWINDOW);
+                         panelW - S(16), rc.bottom - S(48) - S(40), SWP_SHOWWINDOW);
+        {
+            int b;
+            for (b = 0; b < BAR_COUNT; b++) {
+                g_barRect[b].left = abW + S(10) + b * S(34);
+                g_barRect[b].right = g_barRect[b].left + S(30);
+                g_barRect[b].top = rc.bottom - S(38);
+                g_barRect[b].bottom = g_barRect[b].top + S(30);
+            }
+        }
         ShowWindow(hwndFind, SW_HIDE);
     } else if (g_view == AB_SEARCH) {
         dwp = move_child(dwp, hwndFind, abW + S(8), S(40),
@@ -1685,6 +1734,30 @@ static void paint_main(HWND hwnd, HDC hdc)
         edge = g_panelRect;
         edge.left = edge.right - 1;
         fill_rect(hdc, edge, g_t.border);
+
+        if (g_view == AB_EXPLORER) {        /* Save and Import, under a hairline */
+            RECT line;
+            int b;
+            line.left = g_panelRect.left + S(10);
+            line.right = g_panelRect.right - S(10);
+            line.top = g_barRect[0].top - S(6);
+            line.bottom = line.top + 1;
+            fill_rect(hdc, line, g_t.border);
+            for (b = 0; b < BAR_COUNT; b++) {
+                double k = (b == g_barPress) ? press_amount(g_barPressAt) : 0;
+                BOOL hot = (g_barHot == b);
+                COLORREF bg = g_t.bg;
+                RECT pill = g_barRect[b], icon = g_barRect[b];
+                if (hot || k > 0) {
+                    bg = blend(g_t.ghostHot, g_t.accent, 0.35 * k);
+                    InflateRect(&pill, -(int)(S(3) * k), -(int)(S(3) * k));
+                    round_fill(hdc, pill, bg, S(6));
+                }
+                InflateRect(&icon, -S(7) - (int)(S(2) * k), -S(7) - (int)(S(2) * k));
+                draw_icon(hdc, icon, b == BAR_SAVE ? ICON_SAVE : ICON_IMPORT,
+                          hot ? g_t.text : g_t.muted, bg);
+            }
+        }
 
         if (g_view == AB_SEARCH) {          /* frame for the borderless find box */
             RECT fr;
@@ -2189,6 +2262,126 @@ static void toggle_fullscreen(HWND hwnd)
 
 /* ═════════════════════════════════════════════════ main window ══ */
 
+/* ═══════════════════════════════════════ saving and importing ══ */
+
+static int bar_hit(POINT p)
+{
+    int i;
+    if (g_view != AB_EXPLORER) return -1;
+    for (i = 0; i < BAR_COUNT; i++)
+        if (contains(g_barRect[i], p)) return i;
+    return -1;
+}
+
+/* Writes what is in the editor to wherever the Save As dialog says, turning
+ * the edit control's \r\n back into plain \n like the files on disk. */
+static void save_as(HWND hwnd)
+{
+    OPENFILENAMEA ofn;
+    char path[MAX_PATH * 2] = "program.adda", dir[MAX_PATH];
+    int sel = (int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0);
+    int len, i, j;
+    char *text;
+    FILE *f;
+
+    if (sel >= 0 && sel < g_fileCount)
+        snprintf(path, sizeof path, "%s", g_files[sel].name);
+    exe_dir(dir, sizeof dir);
+
+    ZeroMemory(&ofn, sizeof ofn);
+    ofn.lStructSize = sizeof ofn;
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = "Adda programs (*.adda)\0*.adda\0All files\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = sizeof path;
+    ofn.lpstrInitialDir = dir;
+    ofn.lpstrDefExt = "adda";
+    ofn.lpstrTitle = "Save";
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameA(&ofn)) return;
+
+    len = GetWindowTextLengthA(hwndCode);
+    text = malloc((size_t)len + 1);
+    if (!text) return;
+    GetWindowTextA(hwndCode, text, len + 1);
+    for (i = j = 0; i < len; i++)
+        if (!(text[i] == '\r' && text[i + 1] == '\n')) text[j++] = text[i];
+
+    f = fopen(path, "wb");
+    if (!f || fwrite(text, 1, (size_t)j, f) != (size_t)j) {
+        MessageBoxA(hwnd, "Windows would not save the file there.\n"
+                          "It may be read-only, or in a folder you cannot change.",
+                    "Save", MB_OK | MB_ICONWARNING);
+    }
+    if (f) fclose(f);
+    free(text);
+    rescan_files();                  /* it may have landed in the Explorer */
+}
+
+/* Copies the chosen files next to adda-gui.exe, where the Explorer looks,
+ * numbering any whose name is already taken, and opens the last one. */
+static void import_files(HWND hwnd)
+{
+    OPENFILENAMEA ofn;
+    static char list[8192];
+    static char from[sizeof list + MAX_PATH];
+    char dir[MAX_PATH], to[MAX_PATH * 3], last[MAX_PATH * 3] = "";
+    const char *name;
+    int failed = 0, i;
+    BOOL multi;
+
+    list[0] = '\0';
+    ZeroMemory(&ofn, sizeof ofn);
+    ofn.lStructSize = sizeof ofn;
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = "Adda programs (*.adda)\0*.adda\0All files\0*.*\0";
+    ofn.lpstrFile = list;
+    ofn.nMaxFile = sizeof list;
+    ofn.lpstrTitle = "Import";
+    ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST |
+                OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameA(&ofn)) return;
+
+    exe_dir(dir, sizeof dir);
+
+    /* One file: the full path, with nFileOffset pointing at its name.
+     * Several: the folder, then each name, each ended by a NUL and the list
+     * by a second one - which shows as a NUL just before nFileOffset. */
+    multi = (list[ofn.nFileOffset - 1] == '\0');
+    for (name = list + ofn.nFileOffset; *name; name += strlen(name) + 1) {
+        char base[MAX_PATH], *dot;
+        const char *ext = strrchr(name, '.');
+
+        if (multi) snprintf(from, sizeof from, "%s\\%s", list, name);
+        else       snprintf(from, sizeof from, "%s", list);
+
+        snprintf(base, sizeof base, "%s", name);
+        dot = strrchr(base, '.');
+        if (dot) *dot = '\0';
+        snprintf(to, sizeof to, "%s%s", dir, name);
+        for (i = 2; GetFileAttributesA(to) != INVALID_FILE_ATTRIBUTES; i++)
+            snprintf(to, sizeof to, "%s%s %d%s", dir, base, i, ext ? ext : "");
+
+        if (CopyFileA(from, to, TRUE)) {
+            const char *slash = strrchr(to, '\\');
+            snprintf(last, sizeof last, "%s", slash ? slash + 1 : to);
+        } else {
+            failed++;
+        }
+        if (!multi) break;
+    }
+
+    rescan_files();
+    if (last[0]) {
+        select_by_name(last);
+        open_file((int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0));
+    }
+    if (failed)
+        MessageBoxA(hwnd, "Some files could not be imported.\n"
+                          "They may be locked, or the folder may be read-only.",
+                    "Import", MB_OK | MB_ICONWARNING);
+}
+
 static int ab_hit(POINT p)
 {
     int i;
@@ -2353,6 +2546,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        {
+            int bar = bar_hit(p);
+            if (bar != g_barHot) {
+                g_barHot = bar;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+        }
+
         hit = ab_hit(p);
         if (hit != g_abHot) {
             RECT strip;
@@ -2373,6 +2574,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_MOUSELEAVE:
         if (g_abHot != -1) { g_abHot = -1; InvalidateRect(hwnd, NULL, FALSE); }
+        if (g_barHot != -1) { g_barHot = -1; InvalidateRect(hwnd, NULL, FALSE); }
         return 0;
 
     case WM_CONTEXTMENU:
@@ -2416,6 +2618,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             g_dragging = TRUE;
             g_dragDY = p.y - g_splitRect.top;
             SetCapture(hwnd);
+            return 0;
+        }
+        at = bar_hit(p);
+        if (at >= 0) {
+            g_barPress = at;
+            g_barPressAt = GetTickCount();
+            SetTimer(hwnd, ID_ANIM, 15, NULL);
+            InvalidateRect(hwnd, &g_barRect[at], FALSE);
+            UpdateWindow(hwnd);
+            if (at == BAR_SAVE) save_as(hwnd); else import_files(hwnd);
             return 0;
         }
         at = ab_hit(p);
@@ -2464,9 +2676,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_TIMER:
         if (wParam == ID_ANIM) {
             if (g_abPress >= 0) InvalidateRect(hwnd, &g_abRect[g_abPress], FALSE);
-            if (press_amount(g_abPressAt) <= 0) {
+            if (g_barPress >= 0) InvalidateRect(hwnd, &g_barRect[g_barPress], FALSE);
+            if (press_amount(g_abPressAt) <= 0 && press_amount(g_barPressAt) <= 0) {
                 KillTimer(hwnd, ID_ANIM);
                 g_abPress = -1;
+                g_barPress = -1;
             }
             return 0;
         }

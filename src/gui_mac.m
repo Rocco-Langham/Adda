@@ -29,6 +29,7 @@
  */
 
 #import <Cocoa/Cocoa.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -184,7 +185,8 @@ static Adda         *g_adda;
 static NSFont *g_fontMono, *g_fontUI, *g_fontUIBold, *g_fontSmall;
 
 /* ── activity bar ────────────────────────────────────────────────── */
-enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR, ICON_PLUS };
+enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR, ICON_PLUS,
+       ICON_SAVE, ICON_IMPORT };
 /* Run and Stop sit under Search; Cheat sheet and Settings are pinned to the
  * bottom. Everything before AB_CHEAT stacks from the top. */
 enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHEAT, AB_GEAR, AB_COUNT };
@@ -239,6 +241,11 @@ static BOOL      g_quiet;             /* selecting from code, not by the user */
 static NSRect g_addRect;
 static BOOL   g_addHot;
 
+/* the Save and Import buttons along the bottom of the Explorer */
+enum { BAR_SAVE, BAR_IMPORT, BAR_COUNT };
+static NSRect g_barRect[BAR_COUNT];
+static int    g_barHot = -1;
+
 /* ── cheat sheet filtering ───────────────────────────────────────── */
 static int g_cheatShown[CHEAT_COUNT];
 static int g_cheatCount;
@@ -284,7 +291,7 @@ static unsigned blend(unsigned a, unsigned b, double t)
  * toward the accent colour, then eases back over PRESS_SECS. One timer
  * drives every view and stops itself once nothing is moving. */
 #define PRESS_SECS  0.22
-enum { PRESS_NONE, PRESS_AB, PRESS_ADD, PRESS_ROW };
+enum { PRESS_NONE, PRESS_AB, PRESS_ADD, PRESS_ROW, PRESS_BAR };
 static int      g_pressKind = PRESS_NONE;
 static int      g_pressIdx;
 static CFTimeInterval g_pressAt;
@@ -362,6 +369,13 @@ static void reload_quietly(NSTableView *tv)
 {
     g_quiet = YES;
     [tv reloadData];
+    /* autoresizesOutlineColumn (and NSTableViewLastColumnOnlyAutoresizingStyle
+     * generally) only re-fits the column when the table view's own FRAME
+     * changes; a reload with the frame untouched leaves the column at
+     * whatever narrow width it last had, and every row's label clips down to
+     * a sliver. This is the reload's half of keeping it full width - the
+     * other half is sizing it once at creation. */
+    [tv sizeLastColumnToFit];
     g_quiet = NO;
 }
 
@@ -530,6 +544,29 @@ static void draw_icon(NSRect box, int kind, unsigned fgc, unsigned bgc)
         ink([NSBezierPath bezierPathWithOvalInRect:
                 NSMakeRect(cx - hole, cy - hole, hole * 2, hole * 2)],
             stroke, fg, bg, YES);
+        break;
+    }
+
+    case ICON_SAVE: {
+        /* a floppy disk: the body with a clipped corner, the shutter at the
+         * top and the label panel at the bottom */
+        static const CGFloat body[]  = { 18,14, 72,14, 86,28, 86,86, 18,86 };
+        static const CGFloat shut[]  = { 32,14, 32,36, 64,36, 64,14 };
+        static const CGFloat label[] = { 30,86, 30,60, 74,60, 74,86 };
+        ink(shape(b, body, 5, YES), stroke, fg, bg, YES);
+        ink(shape(b, shut, 4, NO), stroke, fg, bg, NO);
+        ink(shape(b, label, 4, NO), stroke, fg, bg, NO);
+        break;
+    }
+
+    case ICON_IMPORT: {
+        /* an arrow coming down into a tray */
+        static const CGFloat tray[]  = { 14,58, 14,86, 86,86, 86,58 };
+        static const CGFloat shaft[] = { 50,12, 50,64 };
+        static const CGFloat head[]  = { 32,46, 50,64, 68,46 };
+        ink(shape(b, tray, 4, NO), stroke, fg, bg, NO);
+        ink(shape(b, shaft, 2, NO), stroke, fg, bg, NO);
+        ink(shape(b, head, 3, NO), stroke, fg, bg, NO);
         break;
     }
 
@@ -1005,6 +1042,7 @@ static void rescan_files(void)
     g_quiet = YES;
     [g_files deselectAll:nil];
     [g_files reloadItem:nil reloadChildren:YES];
+    [g_files sizeLastColumnToFit];   /* see the comment in reload_quietly */
     g_quiet = NO;
 }
 
@@ -1153,9 +1191,6 @@ static void begin_rename(NSInteger row)
      * responder, so that pass has to happen first or it inherits a stale,
      * unresolved one and renders blank. */
     [cell layoutSubtreeIfNeeded];
-    fprintf(stderr, "BEGIN_RENAME f.frame=%s cell.bounds=%s constraints=%ld\n",
-            NSStringFromRect(f.frame).UTF8String, NSStringFromRect(cell.bounds).UTF8String,
-            (long)f.constraints.count);
     [g_win makeFirstResponder:f];
 
     /* the name without its .adda selected, as the Finder does - a folder has
@@ -1261,11 +1296,99 @@ static void create_and_edit(NSString *path, BOOL isDir)
 
     invalidate_tree();
     [g_files reloadItem:nil reloadChildren:YES];
+    [g_files sizeLastColumnToFit];   /* see the comment in reload_quietly */
     reveal(path);
     if (!isDir) open_file(path);
 
     row = [g_files rowForItem:path];
     if (row >= 0) { select_quietly(row); begin_rename(row); }
+}
+
+/* ═══════════════════════════════════════════ saving and importing ══ */
+
+static int bar_hit(NSPoint p)
+{
+    int i;
+    if (g_view != AB_EXPLORER) return -1;
+    for (i = 0; i < BAR_COUNT; i++)
+        if (NSPointInRect(p, g_barRect[i])) return i;
+    return -1;
+}
+
+static NSArray<UTType *> *adda_types(void)
+{
+    UTType *t = [UTType typeWithFilenameExtension:@"adda"];
+    return t ? @[ t ] : @[];
+}
+
+/* Writes what is in the editor to wherever the Finder's Save panel says. */
+static void save_as(void)
+{
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    NSString *item = g_files.selectedRow >= 0 ? [g_files itemAtRow:g_files.selectedRow] : nil;
+    BOOL isDir = NO;
+
+    panel.title = @"Save";
+    panel.allowedContentTypes = adda_types();
+    panel.allowsOtherFileTypes = YES;
+    panel.directoryURL = [NSURL fileURLWithPath:target_dir()];
+    if (item && [NSFileManager.defaultManager fileExistsAtPath:item isDirectory:&isDir] && !isDir)
+        panel.nameFieldStringValue = item.lastPathComponent;
+    else
+        panel.nameFieldStringValue = @"program.adda";
+
+    [panel beginSheetModalForWindow:g_win completionHandler:^(NSModalResponse r) {
+        NSError *err = nil;
+        if (r != NSModalResponseOK) return;
+        if (![g_code.string writeToURL:panel.URL atomically:YES
+                              encoding:NSUTF8StringEncoding error:&err]) {
+            warn(@"The Mac would not save the file there.\n"
+                 @"It may be locked, or in a folder you cannot change.");
+            return;
+        }
+        rescan_files();              /* it may have landed in the Explorer */
+        reveal(panel.URL.path);
+        select_by_path(panel.URL.path);
+    }];
+}
+
+/* Copies the chosen files into the Explorer's folder (or the folder that is
+ * selected in it), numbering any whose name is already taken, and opens the
+ * last one. */
+static void import_files(void)
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+
+    panel.title = @"Import";
+    panel.prompt = @"Import";
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = YES;
+    panel.allowedContentTypes = adda_types();
+
+    [panel beginSheetModalForWindow:g_win completionHandler:^(NSModalResponse r) {
+        NSString *dir = target_dir(), *last = nil;
+        int failed = 0;
+
+        if (r != NSModalResponseOK) return;
+        for (NSURL *url in panel.URLs) {
+            NSString *name = url.lastPathComponent;
+            NSString *to = unique_path(dir, name.stringByDeletingPathExtension, name.pathExtension);
+            if ([NSFileManager.defaultManager copyItemAtPath:url.path toPath:to error:NULL])
+                last = to;
+            else
+                failed++;
+        }
+        rescan_files();
+        if (last) {
+            reveal(last);
+            select_by_path(last);
+            open_file(last);
+        }
+        if (failed)
+            warn(@"Some files could not be imported.\n"
+                 @"They may be locked, or the folder may be read-only.");
+    }];
 }
 
 /* ═══════════════════════════════════════════════════ searching ══ */
@@ -1349,10 +1472,12 @@ static void layout(void)
     g_splitHit  = NSMakeRect(x, y + codeH - 6, W - x, splitH + 6);
 
     if (g_view == AB_EXPLORER) {
-        g_filesScroll.frame = sized(abW + 8, 40, panelW - 16, H - 48);
+        g_filesScroll.frame = sized(abW + 8, 40, panelW - 16, H - 48 - 40);
         g_filesScroll.hidden = NO;
         g_find.hidden = YES;
         g_addRect = NSMakeRect(NSMaxX(g_panelRect) - 14 - 20, 8, 20, 20);
+        for (i = 0; i < BAR_COUNT; i++)
+            g_barRect[i] = NSMakeRect(abW + 10 + i * 34, H - 38, 30, 30);
     } else if (g_view == AB_SEARCH) {
         /* the field is borderless; paint_main draws its frame in the theme */
         g_findBox = sized(abW + 8, 40, panelW - 16, 28);
@@ -1372,7 +1497,11 @@ static void layout(void)
     for (i = 0; i < AB_COUNT; i++)
         [g_main addToolTipRect:g_abRect[i] owner:AB_TIP[i] userData:NULL];
     if (g_view == AB_EXPLORER)
+    {
         [g_main addToolTipRect:g_addRect owner:@"New File or Folder" userData:NULL];
+        [g_main addToolTipRect:g_barRect[BAR_SAVE] owner:@"Save As..." userData:NULL];
+        [g_main addToolTipRect:g_barRect[BAR_IMPORT] owner:@"Import Files..." userData:NULL];
+    }
 
     [g_win invalidateCursorRectsForView:g_main];
     g_main.needsDisplay = YES;
@@ -1439,6 +1568,20 @@ static void paint_main(void)
             unsigned addBg = (g_addHot || k > 0) ? blend(g_t.ghostHot, g_t.accent, 0.35 * k) : g_t.bg;
             if (addBg != g_t.bg) round_fill(NSInsetRect(g_addRect, -3 + 2 * k, -3 + 2 * k), addBg, 6);
             draw_icon(NSInsetRect(g_addRect, 2 + k, 2 + k), ICON_PLUS, addFg, addBg);
+
+            /* Save and Import, under a hairline */
+            fill_rect(NSMakeRect(NSMinX(g_panelRect) + 10, NSMinY(g_barRect[0]) - 6,
+                                 NSWidth(g_panelRect) - 20, 1), g_t.border);
+            for (int b = 0; b < BAR_COUNT; b++) {
+                double kb = press_amount(PRESS_BAR, b);
+                BOOL hotb = (g_barHot == b);
+                unsigned bg = (hotb || kb > 0) ? blend(g_t.ghostHot, g_t.accent, 0.35 * kb) : g_t.bg;
+                if (bg != g_t.bg)
+                    round_fill(NSInsetRect(g_barRect[b], 3 * kb, 3 * kb), bg, 6);
+                draw_icon(NSInsetRect(g_barRect[b], 7 + 2 * kb, 7 + 2 * kb),
+                          b == BAR_SAVE ? ICON_SAVE : ICON_IMPORT,
+                          hotb ? g_t.text : g_t.muted, bg);
+            }
         }
 
         fill_rect(NSMakeRect(NSMaxX(g_panelRect) - 1, 0, 1, NSHeight(rc)), g_t.border);
@@ -1978,6 +2121,10 @@ static void build_menu(void)
         g_addHot = overAdd;
         [self setNeedsDisplayInRect:NSInsetRect(g_addRect, -4, -4)];
     }
+    {
+        int bar = bar_hit(p);
+        if (bar != g_barHot) { g_barHot = bar; self.needsDisplay = YES; }
+    }
 }
 
 - (void)mouseExited:(NSEvent *)e
@@ -1985,6 +2132,7 @@ static void build_menu(void)
     (void)e;
     if (g_abHot != -1) { g_abHot = -1; self.needsDisplay = YES; }
     if (g_addHot) { g_addHot = NO; self.needsDisplay = YES; }
+    if (g_barHot != -1) { g_barHot = -1; self.needsDisplay = YES; }
 }
 
 - (void)mouseDown:(NSEvent *)e
@@ -1992,6 +2140,12 @@ static void build_menu(void)
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
     int at;
 
+    at = bar_hit(p);
+    if (at >= 0) {
+        press(PRESS_BAR, at);
+        if (at == BAR_SAVE) save_as(); else import_files();
+        return;
+    }
     if (g_view == AB_EXPLORER && NSPointInRect(p, g_addRect)) {
         press(PRESS_ADD, 0);
         show_add_menu(p);
@@ -2663,11 +2817,6 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     (void)column;
     [NSFileManager.defaultManager fileExistsAtPath:item isDirectory:&isDir];
     c.textField.attributedStringValue = tree_label(item.lastPathComponent, isDir);
-    [c layoutSubtreeIfNeeded];
-    fprintf(stderr, "VIEWFOR item=%s field.frame=%s field.str=%s field.hidden=%d field.alpha=%.2f cell.hidden=%d\n",
-            item.lastPathComponent.UTF8String, NSStringFromRect(c.textField.frame).UTF8String,
-            c.textField.attributedStringValue.string.UTF8String, c.textField.hidden, c.textField.alphaValue,
-            c.hidden);
     return c;
 }
 
