@@ -64,8 +64,21 @@ static void show_line(uint32_t line, const char *at)
     }
 }
 
+bool        adda_quiet;
+uint32_t    adda_err_line;
+const char *adda_err_at;
+char        adda_err_msg[256];
+
 static void report(const char *at, uint32_t line, const char *fmt, va_list ap)
 {
+    va_list copy;
+    va_copy(copy, ap);
+    vsnprintf(adda_err_msg, sizeof adda_err_msg, fmt, copy);
+    va_end(copy);
+    adda_err_line = line;
+    adda_err_at = at;
+    if (adda_quiet) return;
+
     fprintf(stderr, "%s:%u: ", src_name, line);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);

@@ -97,7 +97,9 @@ That produces `./adda`. Run a program with:
 ```
 
 Other flags: `--tokens` shows how the lexer split your source, and `--stats`
-reports how much memory the run used.
+reports how much memory the run used. `--check` lists every syntax error
+without running anything, one per line as `line column length message` - it
+is what the GUI's warning-triangle button uses.
 
 ## Typing at it
 

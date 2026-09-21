@@ -5,15 +5,72 @@
  *   adda program.adda        run it
  *   adda --tokens file       show how the lexer split the source
  *   adda --stats file        run it, then report arena bytes used
+ *   adda --check file        list syntax errors without running (for the GUI)
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 #include "adda.h"
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+/* --check: report every syntax error without running anything, one per line
+ * on stdout as `line column length message` (column 0-based, in bytes).
+ * The parser stops at its first error, so the line it complained about is
+ * blanked out - keeping its newline, so every other line keeps its number -
+ * and the whole thing is parsed again, until it passes or stops making
+ * progress. */
+static void check(char *src)
+{
+    volatile int found = 0;
+    volatile uint32_t lastLine = 0;
+
+    adda_quiet = true;
+    while (found < 20) {
+        const char *start, *end, *at;
+        uint32_t n;
+        int col, len;
+
+        if (setjmp(adda_error_jmp) == 0) {
+            (void)parse(lex(src));
+            break;                                  /* clean */
+        }
+        if (adda_err_line == 0 || adda_err_line == lastLine) break;
+        lastLine = adda_err_line;
+
+        for (start = src, n = 1; *start && n < adda_err_line; start++)
+            if (*start == '\n') n++;
+        for (end = start; *end && *end != '\n'; end++) {}
+        while (end > start && end[-1] == '\r') end--;
+
+        at = adda_err_at;
+        if (at && at >= start && at <= end) {
+            /* the word or number the error is about, else just that character */
+            const char *e;
+            if (at == end && at > start) at--;      /* past the end: mark the last character */
+            e = at;
+            while (e < end && (isalnum((unsigned char)*e) || *e == '_')) e++;
+            if (e == at && at < end) e = at + 1;
+            col = (int)(at - start);
+            len = (int)(e - at);
+        } else {                                    /* the whole line, less indent */
+            const char *b = start;
+            while (b < end && (*b == ' ' || *b == '\t')) b++;
+            col = (int)(b - start);
+            len = (int)(end - b);
+        }
+        if (len < 1) len = 1;                       /* e.g. something missing at the end */
+
+        printf("%u %d %d %s\n", (unsigned)adda_err_line, col, len, adda_err_msg);
+        found++;
+
+        for (at = start; at < end; at++) *(char *)at = ' ';
+    }
+    adda_quiet = false;
+}
 
 static char *read_file(const char *path)
 {
@@ -53,7 +110,7 @@ static void dump_tokens(const char *src)
 
 static void usage(void)
 {
-    fputs("usage: adda [--tokens|--ast|--stats] program.adda\n"
+    fputs("usage: adda [--tokens|--ast|--stats|--check] program.adda\n"
           "       adda                      start an interactive session\n", stderr);
     exit(64);
 }
@@ -95,7 +152,9 @@ int main(int argc, char **argv)
     src = read_file(path);
     adda_source(path, src);
 
-    if (mode && strcmp(mode, "--tokens") == 0) {
+    if (mode && strcmp(mode, "--check") == 0) {
+        check(src);
+    } else if (mode && strcmp(mode, "--tokens") == 0) {
         dump_tokens(src);
     } else if (mode && strcmp(mode, "--ast") == 0) {
         fputs("adda: --ast is not available yet\n", stderr);

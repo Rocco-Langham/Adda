@@ -37,6 +37,13 @@ void adda_error(uint32_t line, const char *fmt, ...);   /* never returns */
 void adda_error_at(const char *at, uint32_t line, const char *fmt, ...);
 void adda_hint(const char *key, const char *fmt, ...);  /* prints once per key */
 
+/* The last error reported, kept for `adda --check`, which sets adda_quiet so
+ * nothing is printed and reads these instead. */
+extern bool        adda_quiet;
+extern uint32_t    adda_err_line;
+extern const char *adda_err_at;          /* NULL when only the line is known */
+extern char        adda_err_msg[256];
+
 /* ------------------------------------------------------------------ values */
 
 typedef enum {

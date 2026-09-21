@@ -145,13 +145,13 @@ static int    g_dpi = 96;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR,
-       ICON_SAVE, ICON_IMPORT };
-/* Run and Stop sit under Search; Cheat sheet and Settings are pinned to the
- * bottom. Everything before AB_CHEAT stacks from the top. */
-enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHEAT, AB_GEAR, AB_COUNT };
+       ICON_SAVE, ICON_IMPORT, ICON_CHECK };
+/* Run and Stop sit under Search; Check, Cheat sheet and Settings are pinned
+ * to the bottom. Everything before AB_CHECK stacks from the top. */
+enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
 
 static const int AB_ICON[AB_COUNT] = {
-    ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR
+    ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHECK, ICON_CHEAT, ICON_GEAR
 };
 
 static int  g_view = AB_EXPLORER;   /* which panel view, or -1 when collapsed */
@@ -510,6 +510,25 @@ static void icon_shape(HDC dc, int kind, int side, COLORREF fg, COLORREF bg)
         label[0] = NP(30, 86, side); label[1] = NP(30, 60, side);
         label[2] = NP(74, 60, side); label[3] = NP(74, 86, side);
         Polyline(dc, label, 4);
+        break;
+    }
+
+    case ICON_CHECK: {
+        /* a warning triangle with a ! in it */
+        POINT tri[3], bang[2];
+        int d = side / 11;
+        POINT c = NP(50, 73, side);
+        HBRUSH dot, oldDot;
+        tri[0] = NP(50, 10, side); tri[1] = NP(92, 86, side);
+        tri[2] = NP(8, 86, side);
+        Polygon(dc, tri, 3);
+        bang[0] = NP(50, 36, side); bang[1] = NP(50, 60, side);
+        Polyline(dc, bang, 2);
+        dot = CreateSolidBrush(fg);
+        oldDot = (HBRUSH)SelectObject(dc, dot);
+        Ellipse(dc, c.x - d / 2, c.y - d / 2, c.x + d / 2 + 1, c.y + d / 2 + 1);
+        SelectObject(dc, oldDot);
+        DeleteObject(dot);
         break;
     }
 
@@ -1494,15 +1513,17 @@ static void layout(HWND hwnd)
         RECT *r = &g_abRect[i];
         r->left = 0;
         r->right = abW;
-        if (i < AB_CHEAT) { r->top = top; top += S(44) + (i == AB_SEARCH ? S(6) : 0); }
+        if (i < AB_CHECK) { r->top = top; top += S(44) + (i == AB_SEARCH ? S(6) : 0); }
         else              { r->top = bottom; bottom += S(44); }
         r->bottom = r->top + S(44);
     }
-    /* the two bottom items were laid out downwards; push them to the bottom */
+    /* the bottom items were laid out downwards; push them to the bottom */
     {
         int shift = rc.bottom - S(8) - g_abRect[AB_GEAR].bottom;
-        g_abRect[AB_CHEAT].top += shift; g_abRect[AB_CHEAT].bottom += shift;
-        g_abRect[AB_GEAR].top  += shift; g_abRect[AB_GEAR].bottom  += shift;
+        for (i = AB_CHECK; i < AB_COUNT; i++) {
+            g_abRect[i].top += shift;
+            g_abRect[i].bottom += shift;
+        }
     }
 
     g_panelRect.left   = abW;
@@ -1592,6 +1613,184 @@ static void layout(HWND hwnd)
 /* The code box wraps long lines, so a number goes only on the first row of
  * each real line; the rows a long line wraps onto get none. The numbers
  * are painted into the edit control itself, straight after it paints. */
+/* ═════════════════════════════════════════ checking for mistakes ══ */
+
+#define CHECK_LINE  RGB(0xFF, 0xE0, 0x66)   /* the whole line with a mistake */
+#define CHECK_SPOT  RGB(0xE5, 0x48, 0x4D)   /* the exact thing that is wrong */
+#define MAX_CHECK   20
+
+typedef struct { int line, col, len; } CheckMark;   /* line 1-based, col in chars */
+static CheckMark g_chk[MAX_CHECK];
+static int       g_chkCount;
+
+/* Runs adda --check over what is in the editor, keeps where each mistake is
+ * for paint_check, and lists them in the console. */
+static void check_code(void)
+{
+    char tmp_dir[MAX_PATH], path[MAX_PATH * 2], exe[MAX_PATH], cmd[MAX_PATH * 4];
+    char out[8192], *line;
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    HANDLE rd = NULL, wr = NULL;
+    DWORD got, total = 0;
+    int len;
+    char *code;
+    FILE *f;
+
+    g_chkCount = 0;
+
+    len = GetWindowTextLengthA(hwndCode);
+    code = malloc((size_t)len + 1);
+    if (!code) return;
+    GetWindowTextA(hwndCode, code, len + 1);
+    GetTempPathA(MAX_PATH, tmp_dir);
+    snprintf(path, sizeof path, "%s_adda_check.adda", tmp_dir);
+    f = fopen(path, "wb");                /* as-is, so columns match the editor */
+    if (!f) { free(code); return; }
+    fwrite(code, 1, (size_t)len, f);
+    fclose(f);
+    free(code);
+
+    get_adda_path(exe, MAX_PATH);
+    snprintf(cmd, sizeof cmd, "\"%s\" --check \"%s\"", exe, path);
+
+    sa.nLength = sizeof sa;
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+    if (!CreatePipe(&rd, &wr, &sa, 0)) { remove(path); return; }
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+
+    ZeroMemory(&si, sizeof si);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = wr;
+    si.hStdError = wr;
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi)) {
+        CloseHandle(rd); CloseHandle(wr); remove(path);
+        MessageBoxA(hwndMain, "Could not find adda.exe to check your code with.",
+                    "Check", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    CloseHandle(wr);
+    while (total < sizeof out - 1 &&
+           ReadFile(rd, out + total, (DWORD)(sizeof out - 1 - total), &got, NULL) && got)
+        total += got;
+    out[total] = '\0';
+    WaitForSingleObject(pi.hProcess, 5000);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(rd);
+    remove(path);
+
+    if (!g_running) console_append("\r\n");
+    for (line = strtok(out, "\r\n"); line && g_chkCount < MAX_CHECK; line = strtok(NULL, "\r\n")) {
+        CheckMark m;
+        int used = 0;
+        char msg[320];
+        if (sscanf(line, "%d %d %d %n", &m.line, &m.col, &m.len, &used) < 3 || used == 0) continue;
+        g_chk[g_chkCount++] = m;
+        if (!g_running) {
+            snprintf(msg, sizeof msg, "  line %d: %s\r\n", m.line, line + used);
+            console_append(msg);
+        }
+    }
+    if (!g_running) {
+        char head[64];
+        if (g_chkCount == 0) snprintf(head, sizeof head, "No mistakes found.\r\n");
+        else snprintf(head, sizeof head, "%d mistake%s found (above).\r\n",
+                      g_chkCount, g_chkCount == 1 ? "" : "s");
+        console_append(head);
+    }
+    InvalidateRect(hwndCode, NULL, FALSE);
+}
+
+/* x of character i in the code box, or of the end of the row when i is the
+ * first character of the next one */
+static int char_x(HWND h, int i)
+{
+    LRESULT r = SendMessageA(h, EM_POSFROMCHAR, (WPARAM)i, 0);
+    return (short)LOWORD(r);
+}
+
+/* Paints over the edit control's own drawing: each row of a line with a
+ * mistake gets a yellow band, the exact spot a red one, and the text is
+ * drawn again on top in a colour that reads on them. */
+static void paint_check(HWND h)
+{
+    RECT rc, fmt;
+    HDC dc;
+    HGDIOBJ oldFont;
+    TEXTMETRICA tm;
+    int len, first, count, v, k;
+    char *text;
+
+    if (!g_chkCount) return;
+    GetClientRect(h, &rc);
+    SendMessageA(h, EM_GETRECT, 0, (LPARAM)&fmt);
+    len = GetWindowTextLengthA(h);
+    text = malloc((size_t)len + 1);
+    if (!text) return;
+    GetWindowTextA(h, text, len + 1);
+
+    dc = GetDC(h);
+    oldFont = SelectObject(dc, hFontMono);
+    GetTextMetricsA(dc, &tm);
+    SetBkMode(dc, TRANSPARENT);
+
+    first = (int)SendMessageA(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    count = (int)SendMessageA(h, EM_GETLINECOUNT, 0, 0);
+
+    for (k = 0; k < g_chkCount; k++) {
+        const CheckMark *m = &g_chk[k];
+        int ls = 0, le, n = 1, a, b;
+
+        while (ls < len && n < m->line) { if (text[ls] == '\n') n++; ls++; }
+        if (n != m->line) continue;
+        for (le = ls; le < len && text[le] != '\r' && text[le] != '\n'; le++) {}
+        a = ls + m->col;
+        b = a + m->len;
+        if (a > le) a = le;
+        if (b > le) b = le;
+
+        for (v = first; v < count; v++) {
+            int rs = (int)SendMessageA(h, EM_LINEINDEX, (WPARAM)v, 0);
+            int re = (v + 1 < count) ? (int)SendMessageA(h, EM_LINEINDEX, (WPARAM)v + 1, 0) : len;
+            int y = fmt.top + (v - first) * tm.tmHeight, i;
+            RECT band;
+
+            if (y >= rc.bottom) break;
+            if (re > le) re = le;
+            if (rs < ls || rs > le || (rs == le && rs != ls)) continue;
+
+            band.left = GUTTER_W;
+            band.right = rc.right;
+            band.top = y;
+            band.bottom = y + tm.tmHeight;
+            fill_rect(dc, band, CHECK_LINE);
+
+            for (i = rs; i < re; i++) {
+                int x = char_x(h, i);
+                int w = (i + 1 < re) ? char_x(h, i + 1) - x : tm.tmAveCharWidth;
+                BOOL spot = (i >= a && i < b);
+                if (spot) {
+                    RECT sr;
+                    sr.left = x; sr.right = x + w; sr.top = y; sr.bottom = y + tm.tmHeight;
+                    fill_rect(dc, sr, CHECK_SPOT);
+                }
+                if (text[i] != '\t') {
+                    SetTextColor(dc, spot ? RGB(255, 255, 255) : RGB(0x1A, 0x1A, 0x1A));
+                    TextOutA(dc, x, y, text + i, 1);
+                }
+            }
+        }
+    }
+
+    SelectObject(dc, oldFont);
+    ReleaseDC(h, dc);
+    free(text);
+}
+
 static void paint_gutter(HWND h)
 {
     RECT rc, fmt, g, num;
@@ -1660,7 +1859,10 @@ static LRESULT CALLBACK CodeProc(HWND h, UINT msg, WPARAM w, LPARAM l,
     (void)id; (void)ref;
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(h, CodeProc, 0);
     res = DefSubclassProc(h, msg, w, l);
-    if (msg == WM_PAINT) paint_gutter(h);
+    if (msg == WM_PAINT) {
+        paint_check(h);
+        paint_gutter(h);
+    }
     return res;
 }
 
@@ -2455,6 +2657,9 @@ static void ab_click(HWND hwnd, int item)
             finish_run(hwnd, "\r\n[stopped]\r\n");
         }
         break;
+    case AB_CHECK:
+        check_code();
+        break;
     case AB_CHEAT:
         open_cheats(hwnd);
         break;
@@ -2790,6 +2995,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         case ID_CODE:
             /* a new or removed line renumbers everything below it */
+            if (HIWORD(wParam) == EN_CHANGE && g_chkCount) {
+                g_chkCount = 0;              /* the marks no longer line up */
+                InvalidateRect(hwndCode, NULL, FALSE);
+            }
             if (HIWORD(wParam) == EN_CHANGE || HIWORD(wParam) == EN_VSCROLL) {
                 RECT g;
                 GetClientRect(hwndCode, &g);

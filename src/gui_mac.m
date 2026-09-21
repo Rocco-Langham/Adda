@@ -131,6 +131,10 @@ static Theme g_t;
 @interface MainView : NSView
 @end
 
+/* the code box: draws the whole-line yellow behind lines with a mistake */
+@interface CodeView : NSTextView
+@end
+
 @interface ConsoleView : NSTextView
 @end
 
@@ -186,18 +190,18 @@ static NSFont *g_fontMono, *g_fontUI, *g_fontUIBold, *g_fontSmall;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR, ICON_PLUS,
-       ICON_SAVE, ICON_IMPORT };
+       ICON_SAVE, ICON_IMPORT, ICON_CHECK };
 /* Run and Stop sit under Search; Cheat sheet and Settings are pinned to the
  * bottom. Everything before AB_CHEAT stacks from the top. */
-enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHEAT, AB_GEAR, AB_COUNT };
+enum { AB_EXPLORER = 0, AB_SEARCH, AB_RUN, AB_STOP, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
 
 static const int AB_ICON[AB_COUNT] = {
-    ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR
+    ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHECK, ICON_CHEAT, ICON_GEAR
 };
 
 /* addToolTipRect keeps no reference to its owner, so these must be literals */
 static NSString *const AB_TIP[AB_COUNT] = {
-    @"Explorer", @"Search", @"Run  ⌘R", @"Stop  ⌘.", @"Cheat sheet", @"Settings"
+    @"Explorer", @"Search", @"Run  ⌘R", @"Stop  ⌘.", @"Check for mistakes", @"Cheat sheet", @"Settings"
 };
 
 static int    g_view = AB_EXPLORER;   /* which panel view, or -1 when collapsed */
@@ -257,6 +261,8 @@ static void open_cheats(void);
 static void refresh_cheats(void);
 static void insert_cheat(NSInteger shownIndex);
 static void run_code(void);
+static void check_code(void);
+static void clear_check(void);
 static void stop_code(void);
 static void send_line(void);
 static void console_clear_pending(void);
@@ -577,6 +583,20 @@ static void draw_icon(NSRect box, int kind, unsigned fgc, unsigned bgc)
         ink(shape(b, tray, 4, NO), stroke, fg, bg, NO);
         ink(shape(b, shaft, 2, NO), stroke, fg, bg, NO);
         ink(shape(b, head, 3, NO), stroke, fg, bg, NO);
+        break;
+    }
+
+    case ICON_CHECK: {
+        /* a warning triangle with a ! in it */
+        static const CGFloat tri[]  = { 50,10, 92,86, 8,86 };
+        static const CGFloat bang[] = { 50,36, 50,60 };
+        CGFloat dot = side * 0.09;
+        NSPoint c = NP(b, 50, 73);
+        ink(shape(b, tri, 3, YES), stroke, fg, bg, YES);
+        ink(shape(b, bang, 2, NO), stroke * 1.2, fg, bg, NO);
+        [fg setFill];
+        [[NSBezierPath bezierPathWithOvalInRect:
+            NSMakeRect(c.x - dot / 2, c.y - dot / 2, dot, dot)] fill];
         break;
     }
 
@@ -1072,6 +1092,7 @@ static void open_file(NSString *path)
 
     g_code.string = text;
     g_codeScroll.verticalRulerView.needsDisplay = YES;
+    clear_check();
     style_text(g_code);
     /* the old undo steps point into text that has gone */
     [g_code.undoManager removeAllActions];
@@ -1445,12 +1466,13 @@ static void layout(void)
 
     /* activity bar slots */
     top = 8;
-    for (i = 0; i < AB_CHEAT; i++) {
+    for (i = 0; i < AB_CHECK; i++) {
         g_abRect[i] = NSMakeRect(0, top, abW, 44);
         top += 44 + (i == AB_SEARCH ? 6 : 0);
     }
     g_abRect[AB_GEAR]  = NSMakeRect(0, H - 8 - 44, abW, 44);
     g_abRect[AB_CHEAT] = NSMakeRect(0, H - 8 - 88, abW, 44);
+    g_abRect[AB_CHECK] = NSMakeRect(0, H - 8 - 132, abW, 44);
 
     g_panelRect = NSMakeRect(abW, 0, panelW, H);
 
@@ -1874,6 +1896,9 @@ static void ab_click(int item)
     case AB_STOP:
         stop_code();
         break;
+    case AB_CHECK:
+        check_code();
+        break;
     case AB_CHEAT:
         open_cheats();
         break;
@@ -1940,7 +1965,7 @@ static void build_window(void)
     g_main = [[MainView alloc] initWithFrame:frame];
     g_win.contentView = g_main;
 
-    g_codeScroll = make_text_view([NSTextView class]);
+    g_codeScroll = make_text_view([CodeView class]);
     g_code = g_codeScroll.documentView;
     g_code.allowsUndo = YES;
 
@@ -1955,7 +1980,11 @@ static void build_window(void)
         /* a new or removed line renumbers everything below it */
         [[NSNotificationCenter defaultCenter]
             addObserverForName:NSTextDidChangeNotification object:g_code queue:nil
-                    usingBlock:^(NSNotification *n) { (void)n; ln.needsDisplay = YES; }];
+                    usingBlock:^(NSNotification *n) {
+                        (void)n;
+                        ln.needsDisplay = YES;
+                        clear_check();       /* the marks no longer line up */
+                    }];
     }
 
     /* Undo could resurrect output we trimmed, or unwind an append, so the
@@ -2428,6 +2457,141 @@ static void press(int kind, int idx)
     g_pressAt = CACurrentMediaTime();
     animate();
 }
+
+/* ═══════════════════════════════════════════ checking for mistakes ══ */
+
+#define CHECK_LINE  0xFFE066u         /* the whole line with a mistake */
+#define CHECK_SPOT  0xE5484Du         /* the exact thing that is wrong */
+
+static NSMutableArray<NSValue *> *g_checkLines;   /* character ranges */
+
+static void clear_check(void)
+{
+    NSLayoutManager *lm = g_code.layoutManager;
+    if (!g_checkLines.count) return;
+    [g_checkLines removeAllObjects];
+    [lm removeTemporaryAttribute:NSBackgroundColorAttributeName
+               forCharacterRange:NSMakeRange(0, g_code.string.length)];
+    [lm removeTemporaryAttribute:NSForegroundColorAttributeName
+               forCharacterRange:NSMakeRange(0, g_code.string.length)];
+    g_code.needsDisplay = YES;
+}
+
+/* Byte offset within a line (what adda --check reports) to a character one. */
+static NSUInteger chars_for_bytes(NSString *line, int bytes)
+{
+    NSData *d = [line dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *head;
+    if (bytes <= 0) return 0;
+    if ((NSUInteger)bytes >= d.length) return line.length;
+    head = [[NSString alloc] initWithBytes:d.bytes length:(NSUInteger)bytes
+                                  encoding:NSUTF8StringEncoding];
+    return head ? head.length : (NSUInteger)bytes;
+}
+
+/* Runs adda --check over what is in the editor, paints each line with a
+ * mistake yellow and the exact spot red, and lists them in the console. */
+static void check_code(void)
+{
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"_adda_check.adda"];
+    NSString *code = g_code.string, *out;
+    NSArray<NSString *> *lines;
+    NSMutableString *report = [NSMutableString string];
+    NSLayoutManager *lm = g_code.layoutManager;
+    NSTask *task = [NSTask new];
+    NSPipe *pipe = [NSPipe pipe];
+    NSData *data;
+    int found = 0;
+
+    clear_check();
+    if (!g_checkLines) g_checkLines = [NSMutableArray array];
+
+    if (![code writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:NULL])
+        return;
+    task.executableURL = [NSURL fileURLWithPath:adda_path()];
+    task.arguments = @[ @"--check", path ];
+    task.standardOutput = pipe;
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    if (![task launchAndReturnError:NULL]) {
+        warn(@"Could not find the adda program to check your code with.");
+        return;
+    }
+    data = [pipe.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    unlink(path.fileSystemRepresentation);
+
+    out = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    lines = [code componentsSeparatedByString:@"\n"];
+
+    for (NSString *row in [out componentsSeparatedByString:@"\n"]) {
+        NSScanner *sc = [NSScanner scannerWithString:row];
+        int line, colB, lenB;
+        NSUInteger start = 0, i, a, b;
+        NSString *msg, *text;
+        NSRange whole, spot;
+
+        if (![sc scanInt:&line] || ![sc scanInt:&colB] || ![sc scanInt:&lenB]) continue;
+        if (line < 1 || (NSUInteger)line > lines.count) continue;
+        msg = sc.scanLocation + 1 < row.length ? [row substringFromIndex:sc.scanLocation + 1] : @"";
+
+        for (i = 0; i + 1 < (NSUInteger)line; i++) start += lines[i].length + 1;
+        text = lines[(NSUInteger)line - 1];
+        if ([text hasSuffix:@"\r"]) text = [text substringToIndex:text.length - 1];
+
+        whole = NSMakeRange(start, text.length);
+        a = chars_for_bytes(text, colB);
+        b = chars_for_bytes(text, colB + lenB);
+        spot = NSMakeRange(start + a, b > a ? b - a : 0);
+
+        [g_checkLines addObject:[NSValue valueWithRange:whole]];
+        [lm addTemporaryAttribute:NSForegroundColorAttributeName value:col(0x1A1A1A)
+                forCharacterRange:whole];
+        if (spot.length) {
+            [lm addTemporaryAttribute:NSBackgroundColorAttributeName value:col(CHECK_SPOT)
+                    forCharacterRange:spot];
+            [lm addTemporaryAttribute:NSForegroundColorAttributeName value:NSColor.whiteColor
+                    forCharacterRange:spot];
+        }
+        [report appendFormat:@"  line %d: %@\n", line, msg];
+        found++;
+    }
+    g_code.needsDisplay = YES;
+
+    if (found && g_checkLines.count) {
+        NSRange first = g_checkLines[0].rangeValue;
+        [g_code scrollRangeToVisible:first];
+    }
+    if (!g_running) {
+        if (found == 0)
+            console_append(@"No mistakes found.\n");
+        else
+            console_append([NSString stringWithFormat:@"%d mistake%s found:\n%@",
+                            found, found == 1 ? "" : "s", report]);
+    }
+}
+
+@implementation CodeView
+
+- (void)drawViewBackgroundInRect:(NSRect)r
+{
+    NSLayoutManager *lm = self.layoutManager;
+    CGFloat x0 = NSMinX(self.bounds), w = NSWidth(self.bounds);
+    NSPoint o = self.textContainerOrigin;
+
+    [super drawViewBackgroundInRect:r];
+    [col(CHECK_LINE) setFill];
+    for (NSValue *v in g_checkLines) {
+        NSRange g = [lm glyphRangeForCharacterRange:v.rangeValue actualCharacterRange:NULL];
+        if (g.length == 0) continue;
+        [lm enumerateLineFragmentsForGlyphRange:g
+            usingBlock:^(NSRect frag, NSRect used, NSTextContainer *c, NSRange gr, BOOL *stop) {
+            (void)used; (void)c; (void)gr; (void)stop;
+            NSRectFill(NSMakeRect(x0, NSMinY(frag) + o.y, w, NSHeight(frag)));
+        }];
+    }
+}
+
+@end
 
 /* ═════════════════════════════════════════════════ line numbers ══ */
 
