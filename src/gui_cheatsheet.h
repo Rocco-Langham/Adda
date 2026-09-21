@@ -173,8 +173,8 @@ static const Cheat CHEATS[] = {
   "delay - 1500\r\n    print hello\r\n    print hi\r\ndelay end" },
 
 { "Open a blank window",
-  "Opens an empty window with this title; the program waits until it is closed. app, application, window, gui, screen",
-  "openApplication My App" },
+  "Opens a window with this title. Everything printed after it appears in the middle of the window. app, application, window, gui, screen",
+  "openApplication My App\r\nprint Hello from my app" },
 
 /* ---- functions ----------------------------------------------------- */
 { "Make a function",

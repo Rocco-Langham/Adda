@@ -176,10 +176,14 @@ typedef struct {
 
 TokenList lex(const char *src);
 
-/* openApplication: opens a blank window titled `title` and returns once it has
- * been closed; false if this system has no window Adda can open. One per
- * platform: window_mac.m, window_win.c, window_none.c. */
-bool      adda_open_window(const char *title);
+/* openApplication: a window whose printed lines sit in its dead centre. One
+ * implementation per platform: window_mac.m, window_win.c, window_none.c.
+ * Closing the window ends the program. */
+bool adda_open_window(const char *title);          /* false: no window here */
+bool adda_window_is_open(void);
+void adda_window_print(const char *text, size_t len);  /* one line */
+void adda_window_wait_ms(double ms);   /* a delay that keeps the window alive */
+void adda_window_run(void);            /* at the end: wait for it to close */
 /* Length of a `[name]` starting at p (brackets included), or 0. It means the
  * same as {name}: the value of the variable called name. */
 uint32_t  adda_bracket_name(const char *p);

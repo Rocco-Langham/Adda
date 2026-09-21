@@ -242,16 +242,25 @@ closes the block as well as `delay end`, and one delay can sit inside another.
 
 ### Opening a window
 
-`openApplication` opens a new, blank window - the start of an app of your own.
-Whatever follows it on the line is the window's title:
+`openApplication` opens a new window - the start of an app of your own.
+Whatever follows it on the line is the window's title. From then on,
+everything you `print` appears in the dead centre of the window instead of the
+console, with the lines stacked as one centred block:
 
 ```adda
-print Opening the window...
+print This one goes to the console
 openApplication My Game
-print The window was closed
+print Hello
+print Welcome to my game
+delay - 1000
+    print (a second later)
+delay end
 ```
 
-The program waits on that line until you close the window, then carries on.
+The program keeps running while the window is open, and `delay` keeps it
+responding. When the program reaches its end the window stays up until you
+close it; closing it earlier stops the program, as closing an app does.
+Questions from `ask` still appear in the console.
 
 ## 8. Functions
 

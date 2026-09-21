@@ -140,6 +140,7 @@ int main(int argc, char **argv)
     if (!path) {
         repl();
         fflush(stdout);
+        if (adda_window_is_open()) adda_window_run();
         arena_free_all();
         return 0;
     }
@@ -161,6 +162,8 @@ int main(int argc, char **argv)
     } else {
         Node *program = parse(lex(src));
         interpret(program);
+        fflush(stdout);
+        if (adda_window_is_open()) adda_window_run();   /* stays up until closed */
         if (mode && strcmp(mode, "--stats") == 0)
             fprintf(stderr, "arena: %lu bytes\n", (unsigned long)arena_bytes_used());
     }

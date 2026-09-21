@@ -537,6 +537,13 @@ static void do_print(Node *n, Scope *sc)
      * that returns nothing should not spray "nothing" down the screen. */
     if (n->flag && IS_NOTHING(v)) return;
 
+    /* after openApplication, printing goes to the middle of the window */
+    if (adda_window_is_open()) {
+        Text *t = value_to_text(v);
+        adda_window_print(t->bytes, t->len);
+        return;
+    }
+
     value_print(v);
     fputc('\n', stdout);
 
@@ -593,6 +600,10 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             if (wait < 0)
                 adda_error(n->line, "delay cannot wait a negative time");
             fflush(stdout);              /* what came before shows before the wait */
+            if (adda_window_is_open()) {
+                adda_window_wait_ms(wait);   /* the window keeps responding */
+                return exec(n->b, sc, ret);
+            }
 #ifdef _WIN32
             Sleep((unsigned long)wait);
 #else
