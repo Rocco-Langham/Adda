@@ -1148,11 +1148,16 @@ static void scan_dir(const char *dir)
     FindClose(h);
 }
 
+/* Straight after an import the Explorer lists only what was imported; the
+ * next full reload (rescan_files) brings everything else back. */
+static BOOL g_importOnly;
+
 static void rescan_files(void)
 {
     char dir[MAX_PATH], sub[MAX_PATH * 2];
     int i;
 
+    g_importOnly = FALSE;
     g_fileCount = 0;
     exe_dir(dir, sizeof(dir));
     scan_dir(dir);
@@ -1948,7 +1953,7 @@ static void paint_main(HWND hwnd, HDC hdc)
         title.top  += S(12);
         title.bottom = title.top + S(20);
         text_at(hdc, title,
-                (g_view == AB_EXPLORER) ? "EXPLORER" : "SEARCH",
+                (g_view == AB_SEARCH) ? "SEARCH" : g_importOnly ? "IMPORTED" : "EXPLORER",
                 hFontSmall, g_t.muted, DT_LEFT | DT_SINGLELINE);
 
         edge = g_panelRect;
@@ -2576,6 +2581,8 @@ static void import_files(HWND hwnd)
     const char *name;
     int failed = 0, i;
     BOOL multi;
+    static char got[MAX_FILES][64];     /* names of what came in */
+    int gotCount = 0;
 
     list[0] = '\0';
     ZeroMemory(&ofn, sizeof ofn);
@@ -2612,6 +2619,8 @@ static void import_files(HWND hwnd)
         if (CopyFileA(from, to, TRUE)) {
             const char *slash = strrchr(to, '\\');
             snprintf(last, sizeof last, "%s", slash ? slash + 1 : to);
+            if (gotCount < MAX_FILES)
+                snprintf(got[gotCount++], sizeof got[0], "%s", last);
         } else {
             failed++;
         }
@@ -2619,6 +2628,25 @@ static void import_files(HWND hwnd)
     }
 
     rescan_files();
+    if (gotCount) {
+        /* show only what came in; nothing else is touched on disk */
+        int keep = 0, j;
+        for (i = 0; i < g_fileCount; i++) {
+            BOOL mine = FALSE;
+            for (j = 0; j < gotCount; j++)
+                if (strcmp(g_files[i].name, got[j]) == 0) mine = TRUE;
+            /* only the copies beside the exe - an examples\ file can share a name */
+            if (mine && strncmp(g_files[i].path, dir, strlen(dir)) == 0 &&
+                !strchr(g_files[i].path + strlen(dir), '\\'))
+                g_files[keep++] = g_files[i];
+        }
+        g_fileCount = keep;
+        g_importOnly = TRUE;
+        SendMessageA(hwndFiles, LB_RESETCONTENT, 0, 0);
+        for (i = 0; i < g_fileCount; i++)
+            SendMessageA(hwndFiles, LB_ADDSTRING, 0, (LPARAM)g_files[i].name);
+        InvalidateRect(hwndMain, &g_panelRect, FALSE);   /* the heading says IMPORTED */
+    }
     if (last[0]) {
         select_by_name(last);
         open_file((int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0));

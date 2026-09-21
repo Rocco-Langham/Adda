@@ -1053,8 +1053,13 @@ static NSArray<NSString *> *scan_children(NSString *dir)
  * a later search, and so a reload after one small change does not lose the
  * scan of everything else that is open. invalidate_tree() clears all of it,
  * for whenever the disk might have changed under it. */
+/* Straight after an import the Explorer lists only what was imported; the
+ * next full reload (rescan_files) brings everything else back. */
+static NSArray<NSString *> *g_importOnly;
+
 static NSArray<NSString *> *children_of(NSString *dir)
 {
+    if (g_importOnly && [dir isEqualToString:g_home]) return g_importOnly;
     NSArray<NSString *> *kids = g_treeCache[dir];
     if (!kids) g_treeCache[dir] = kids = scan_children(dir);
     return kids;
@@ -1067,6 +1072,7 @@ static void invalidate_tree(void) { [g_treeCache removeAllObjects]; }
  * reload is done. */
 static void rescan_files(void)
 {
+    g_importOnly = nil;
     invalidate_tree();
     if (!g_files) return;
     g_quiet = YES;
@@ -1399,20 +1405,26 @@ static void import_files(void)
 
     [panel beginSheetModalForWindow:g_win completionHandler:^(NSModalResponse r) {
         NSString *dir = target_dir(), *last = nil;
+        NSMutableArray<NSString *> *got = [NSMutableArray array];
         int failed = 0;
 
         if (r != NSModalResponseOK) return;
         for (NSURL *url in panel.URLs) {
             NSString *name = url.lastPathComponent;
             NSString *to = unique_path(dir, name.stringByDeletingPathExtension, name.pathExtension);
-            if ([NSFileManager.defaultManager copyItemAtPath:url.path toPath:to error:NULL])
+            if ([NSFileManager.defaultManager copyItemAtPath:url.path toPath:to error:NULL]) {
                 last = to;
+                [got addObject:to];
+            }
             else
                 failed++;
         }
         rescan_files();
         if (last) {
-            reveal(last);
+            /* show only what came in; nothing else is touched on disk */
+            g_importOnly = [got copy];
+            [g_files reloadItem:nil reloadChildren:YES];
+            g_main.needsDisplay = YES;          /* the heading says IMPORTED */
             select_by_path(last);
             open_file(last);
         }
@@ -1591,7 +1603,7 @@ static void paint_main(void)
         fill_rect(g_panelRect, g_t.bg);
 
         text_at(NSMakeRect(NSMinX(g_panelRect) + 14, 12, labelRight - (NSMinX(g_panelRect) + 14), 20),
-                (g_view == AB_EXPLORER) ? @"EXPLORER" : @"SEARCH",
+                (g_view == AB_SEARCH) ? @"SEARCH" : g_importOnly ? @"IMPORTED" : @"EXPLORER",
                 g_fontSmall, g_t.muted, T_LEFT);
 
         if (g_view == AB_EXPLORER) {
