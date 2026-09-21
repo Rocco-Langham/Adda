@@ -251,7 +251,8 @@ static NSRect g_barRect[BAR_COUNT];
 static int    g_barHot = -1;
 
 /* ── cheat sheet filtering ───────────────────────────────────────── */
-static int g_cheatShown[CHEAT_COUNT];
+static int g_cheatShown[CHEAT_MAX];
+static BOOL g_cheatTurned;          /* the last click followed a link */
 static int g_cheatCount;
 
 static void apply_theme(void);
@@ -677,6 +678,7 @@ static BOOL has_text(const char *hay, const char *needle)
     const char *p;
 
     if (!n) return YES;
+    if (!hay) return NO;                 /* a link has no snippet */
     for (p = hay; *p; p++) {
         size_t i = 0;
         while (i < n && p[i] &&
@@ -1849,11 +1851,11 @@ static void refresh_cheats(void)
     int i;
 
     g_cheatCount = 0;
-    for (i = 0; i < CHEAT_COUNT; i++) {
+    for (i = 0; i < CUR_CHEAT_COUNT; i++) {
         if (!needle[0] ||
-            has_text(CHEATS[i].title, needle) ||
-            has_text(CHEATS[i].about, needle) ||
-            has_text(CHEATS[i].snippet, needle))
+            has_text(CUR_CHEATS[i].title, needle) ||
+            has_text(CUR_CHEATS[i].about, needle) ||
+            has_text(CUR_CHEATS[i].snippet, needle))
             g_cheatShown[g_cheatCount++] = i;
     }
 
@@ -1871,9 +1873,14 @@ static void insert_cheat(NSInteger shownIndex)
     NSRange r;
 
     if (shownIndex < 0 || shownIndex >= g_cheatCount) return;
+    if (!CUR_CHEATS[g_cheatShown[shownIndex]].snippet) {   /* a link: turn the page */
+        g_cheatPage = !g_cheatPage;
+        refresh_cheats();
+        return;
+    }
 
     /* the snippets carry \r\n for the Windows EDIT control */
-    snip = [@(CHEATS[g_cheatShown[shownIndex]].snippet)
+    snip = [@(CUR_CHEATS[g_cheatShown[shownIndex]].snippet)
                stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"];
 
     /* through shouldChange/didChange, so Cmd+Z can take it back out */
@@ -1943,6 +1950,7 @@ static void open_cheats(void)
         g_cheatList = (CheatTable *)make_table([CheatTable class], 43);
         g_cheatList.target = g_adda;
         g_cheatList.doubleAction = @selector(insertClickedCheat:);
+        g_cheatList.action = @selector(followCheatLink:);   /* a link: one click */
 
         sv = scroll_round(g_cheatList);
         sv.frame = NSMakeRect(14, 50, NSWidth(frame) - 28, NSHeight(frame) - 50 - 32);
@@ -2937,7 +2945,21 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
 - (void)insertClickedCheat:(id)sender
 {
     (void)sender;
+    /* the first click of this double turned the page; the second is not meant
+     * for whatever row is under the pointer now */
+    if (g_cheatTurned) { g_cheatTurned = NO; return; }
     insert_cheat(g_cheatList.clickedRow);
+}
+
+- (void)followCheatLink:(id)sender
+{
+    NSInteger row = g_cheatList.clickedRow;
+    (void)sender;
+    g_cheatTurned = NO;
+    if (row >= 0 && row < g_cheatCount && !CUR_CHEATS[g_cheatShown[row]].snippet) {
+        insert_cheat(row);
+        g_cheatTurned = YES;
+    }
 }
 
 /* acts on the right-clicked row, which the Mac rings but does not select */
@@ -3152,10 +3174,10 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     Cell *c = make_cell(tv, YES);
 
     (void)column;
-    c.textField.stringValue = @(CHEATS[g_cheatShown[row]].title);
+    c.textField.stringValue = @(CUR_CHEATS[g_cheatShown[row]].title);
     c.textField.font = g_fontUIBold;
     c.textField.textColor = col(g_t.text);
-    c.sub.stringValue = @(CHEATS[g_cheatShown[row]].about);
+    c.sub.stringValue = @(CUR_CHEATS[g_cheatShown[row]].about);
     c.sub.font = g_fontSmall;
     c.sub.textColor = col(g_t.muted);
     return c;

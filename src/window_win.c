@@ -45,12 +45,37 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
             HGDIOBJ ob = SelectObject(dc, fill), op = SelectObject(dc, edge);
             int i;
             for (i = 0; i < g_shapeCount; i++) {
-                double r[4];
-                int x, y, w, ht, round;
-                adda_shape_rect(g_shapes[i].inset, rc.right, rc.bottom, r);
+                double r[4], xy[20];
+                int x, y, w, ht, round, kind = g_shapes[i].kind, corners, k;
+                adda_shape_rect(kind, g_shapes[i].inset, rc.right, rc.bottom, r);
                 x = (int)r[0]; y = (int)r[1]; w = (int)r[2]; ht = (int)r[3];
-                round = g_shapes[i].kind == SHAPE_ROUNDED_BOX ? 24 : 0;
-                RoundRect(dc, x, y, x + w, y + ht, round, round);
+
+                corners = adda_shape_points(kind, r, xy);
+                if (corners) {
+                    POINT pts[10];
+                    for (k = 0; k < corners; k++) {
+                        pts[k].x = (LONG)xy[2 * k];
+                        pts[k].y = (LONG)xy[2 * k + 1];
+                    }
+                    Polygon(dc, pts, corners);
+                } else if (kind == SHAPE_LINE) {    /* corner to corner of its space */
+                    HPEN thick = CreatePen(PS_SOLID, 2, mix(bg, fg, 55));
+                    HGDIOBJ was = SelectObject(dc, thick);
+                    MoveToEx(dc, x, y, NULL);
+                    LineTo(dc, x + w, y + ht);
+                    SelectObject(dc, was);
+                    DeleteObject(thick);
+                } else if (kind == SHAPE_CIRCLE) {  /* the biggest circle that fits */
+                    int d = w < ht ? w : ht;
+                    Ellipse(dc, x + (w - d) / 2, y + (ht - d) / 2,
+                            x + (w - d) / 2 + d, y + (ht - d) / 2 + d);
+                } else if (kind == SHAPE_OVAL) {
+                    Ellipse(dc, x, y, x + w, y + ht);
+                } else {
+                    round = kind == SHAPE_ROUNDED_BOX ? 24
+                          : kind == SHAPE_PILL ? (w < ht ? w : ht) : 0;
+                    RoundRect(dc, x, y, x + w, y + ht, round, round);
+                }
             }
             SelectObject(dc, ob); SelectObject(dc, op);
             DeleteObject(fill); DeleteObject(edge);

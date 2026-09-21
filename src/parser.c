@@ -796,13 +796,19 @@ static Node *parse_insert(P *p)
     Node *n = node(N_SHAPE, line);
     int k;
 
-    if (word_at(p, s + 1, "rounded") && word_at(p, s + 2, "box") && e == s + 3)
-        n->op = SHAPE_ROUNDED_BOX;
-    else if (word_at(p, s + 1, "box") && e == s + 2)
-        n->op = SHAPE_BOX;
-    else
+    /* the shape's name is the rest of the line, e.g. "rounded box" */
+    n->op = -1;
+    if (e > s + 1) {
+        const char *from = p->t[s + 1].start;
+        size_t len = (size_t)(token_end(&p->t[e - 1]) - from);
+        for (k = 0; k < SHAPE_COUNT; k++)
+            if (strlen(ADDA_SHAPE_NAMES[k]) == len && memcmp(ADDA_SHAPE_NAMES[k], from, len) == 0)
+                n->op = k;
+    }
+    if (n->op < 0)
         adda_error_at(p->t[s].start, line,
-                      "insert what? The shapes are: insert box, insert rounded box");
+                      "insert what? The shapes are: box, rounded box, pill, circle, oval, "
+                      "triangle, diamond, hexagon, star and line - the cheat sheet has them all");
     for (k = 0; k < 4; k++) {
         Node *side = node(N_NUMBER, line);
         side->number = -1;                  /* not given */

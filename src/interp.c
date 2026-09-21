@@ -553,9 +553,18 @@ static void do_print(Node *n, Scope *sc)
     fflush(stdout);
 }
 
-void adda_shape_rect(const double in[4], double W, double H, double out[4])
+const char *const ADDA_SHAPE_NAMES[SHAPE_COUNT] = {
+    "box", "rounded box", "pill", "circle", "oval",
+    "triangle", "diamond", "hexagon", "star", "line"
+};
+
+void adda_shape_rect(int kind, const double in[4], double W, double H, double out[4])
 {
-    const double defW = 200, defH = 100;
+    /* round and pointed shapes start square; boxes, pills and ovals wide */
+    bool square = kind == SHAPE_CIRCLE || kind == SHAPE_TRIANGLE ||
+                  kind == SHAPE_DIAMOND || kind == SHAPE_HEXAGON || kind == SHAPE_STAR;
+    const double defW = square ? 100 : 200;
+    const double defH = kind == SHAPE_LINE ? 0 : 100;   /* a line lies flat */
     double x, y, w, h;
     double l = in[SIDE_LEFT], r = in[SIDE_RIGHT], t = in[SIDE_TOP], b = in[SIDE_BOTTOM];
 
@@ -572,6 +581,44 @@ void adda_shape_rect(const double in[4], double W, double H, double out[4])
     out[0] = x; out[1] = y;
     out[2] = w > 0 ? w : 0;
     out[3] = h > 0 ? h : 0;
+}
+
+int adda_shape_points(int kind, const double r[4], double xy[20])
+{
+    double x = r[0], y = r[1], w = r[2], h = r[3];
+    double cx = x + w / 2, cy = y + h / 2;
+    int i, n = 0;
+
+    switch (kind) {
+    case SHAPE_TRIANGLE:                    /* pointing up */
+        xy[0] = cx;    xy[1] = y;
+        xy[2] = x + w; xy[3] = y + h;
+        xy[4] = x;     xy[5] = y + h;
+        return 3;
+    case SHAPE_DIAMOND:
+        xy[0] = cx;    xy[1] = y;
+        xy[2] = x + w; xy[3] = cy;
+        xy[4] = cx;    xy[5] = y + h;
+        xy[6] = x;     xy[7] = cy;
+        return 4;
+    case SHAPE_HEXAGON:                     /* flat top and bottom */
+        for (i = 0; i < 6; i++) {
+            double a = 3.14159265358979 / 3 * i;
+            xy[n++] = cx + w / 2 * cos(a);
+            xy[n++] = cy + h / 2 * sin(a);
+        }
+        return 6;
+    case SHAPE_STAR:                        /* five points, one straight up */
+        for (i = 0; i < 10; i++) {
+            double a = -3.14159265358979 / 2 + 3.14159265358979 / 5 * i;
+            double k = (i % 2) ? 0.4 : 1.0;
+            xy[n++] = cx + w / 2 * k * cos(a);
+            xy[n++] = cy + h / 2 * k * sin(a);
+        }
+        return 10;
+    default:
+        return 0;
+    }
 }
 
 static Flow exec(Node *n, Scope *sc, Value *ret)

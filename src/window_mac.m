@@ -42,17 +42,43 @@ static bool        g_closed;
 
     /* shapes first, so the text sits on top of them */
     for (NSArray<NSNumber *> *sh in self.shapes) {
-        double in[4], r[4];
-        int k;
-        CGFloat radius;
+        double in[4], r[4], xy[20];
+        int k, kind = sh[0].intValue, corners;
+        NSRect box;
         NSBezierPath *path;
         for (k = 0; k < 4; k++) in[k] = sh[(NSUInteger)k + 1].doubleValue;
-        adda_shape_rect(in, NSWidth(self.bounds), NSHeight(self.bounds), r);
-        radius = sh[0].intValue == SHAPE_ROUNDED_BOX ? 12 : 0;
-        if (radius * 2 > r[2]) radius = r[2] / 2;
-        if (radius * 2 > r[3]) radius = r[3] / 2;
-        path = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(r[0], r[1], r[2], r[3])
-                                               xRadius:radius yRadius:radius];
+        adda_shape_rect(kind, in, NSWidth(self.bounds), NSHeight(self.bounds), r);
+        box = NSMakeRect(r[0], r[1], r[2], r[3]);
+
+        corners = adda_shape_points(kind, r, xy);
+        if (corners) {
+            path = [NSBezierPath bezierPath];
+            [path moveToPoint:NSMakePoint(xy[0], xy[1])];
+            for (k = 1; k < corners; k++) [path lineToPoint:NSMakePoint(xy[2 * k], xy[2 * k + 1])];
+            [path closePath];
+            path.lineJoinStyle = NSLineJoinStyleRound;
+        } else if (kind == SHAPE_LINE) {
+            path = [NSBezierPath bezierPath];       /* corner to corner of its space */
+            [path moveToPoint:NSMakePoint(r[0], r[1])];
+            [path lineToPoint:NSMakePoint(r[0] + r[2], r[1] + r[3])];
+            path.lineWidth = 2;
+            path.lineCapStyle = NSLineCapStyleRound;
+            [[NSColor.labelColor colorWithAlphaComponent:0.55] setStroke];
+            [path stroke];
+            continue;
+        } else if (kind == SHAPE_CIRCLE || kind == SHAPE_OVAL) {
+            if (kind == SHAPE_CIRCLE) {             /* the biggest circle that fits */
+                CGFloat d = r[2] < r[3] ? r[2] : r[3];
+                box = NSMakeRect(r[0] + (r[2] - d) / 2, r[1] + (r[3] - d) / 2, d, d);
+            }
+            path = [NSBezierPath bezierPathWithOvalInRect:box];
+        } else {
+            CGFloat radius = kind == SHAPE_ROUNDED_BOX ? 12
+                           : kind == SHAPE_PILL ? (r[2] < r[3] ? r[2] : r[3]) / 2 : 0;
+            if (radius * 2 > r[2]) radius = r[2] / 2;
+            if (radius * 2 > r[3]) radius = r[3] / 2;
+            path = [NSBezierPath bezierPathWithRoundedRect:box xRadius:radius yRadius:radius];
+        }
         [[NSColor.labelColor colorWithAlphaComponent:0.10] setFill];
         [path fill];
         [[NSColor.labelColor colorWithAlphaComponent:0.30] setStroke];

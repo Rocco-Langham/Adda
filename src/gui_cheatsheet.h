@@ -176,13 +176,9 @@ static const Cheat CHEATS[] = {
   "Opens a window with this title. Everything printed after it appears in the middle of the window. app, application, window, gui, screen",
   "openApplication My App\r\nprint Hello from my app" },
 
-{ "Draw a rounded box in the window",
-  "After openApplication. Each 3px line says how far the box stops from those edges. shape, rectangle, panel, card",
-  "insert rounded box\r\n3px top,right,left" },
-
-{ "Draw a square box in the window",
-  "Like a rounded box with sharp corners. shape, rectangle, square",
-  "insert box\r\n20px top,bottom\r\n40px left,right" },
+{ "All shapes ->",
+  "Click to see every shape you can draw with insert. circle, star, triangle, box, draw, picture",
+  NULL },
 
 /* ---- functions ----------------------------------------------------- */
 { "Make a function",
@@ -212,5 +208,64 @@ static const Cheat CHEATS[] = {
 };
 
 #define CHEAT_COUNT ((int)(sizeof(CHEATS) / sizeof(CHEATS[0])))
+
+/* The shapes page, reached from "All shapes" above. An entry with no snippet
+ * is a link: it switches between this page and the main one. Every snippet
+ * goes after an openApplication line. */
+static const Cheat SHAPE_CHEATS[] = {
+
+{ "<- Back to the cheat sheet",
+  "Click to go back to everything else.",
+  NULL },
+
+{ "Box",
+  "Square corners. Each 20px line says how far it stops from those edges. rectangle, square",
+  "insert box\r\n20px top,left" },
+
+{ "Rounded box",
+  "A box with soft corners. panel, card, rectangle",
+  "insert rounded box\r\n3px top,right,left" },
+
+{ "Pill",
+  "A box whose ends are fully round. capsule, button, lozenge",
+  "insert pill\r\n20px left,right\r\n40px bottom" },
+
+{ "Circle",
+  "The biggest circle that fits its space; 100px across on its own. round, dot, ball",
+  "insert circle" },
+
+{ "Oval",
+  "Stretches to fill its space. ellipse, egg",
+  "insert oval\r\n40px left,right" },
+
+{ "Triangle",
+  "Pointing up. arrow, pyramid",
+  "insert triangle\r\n20px top,right" },
+
+{ "Diamond",
+  "A square on its point. rhombus",
+  "insert diamond\r\n20px bottom,left" },
+
+{ "Hexagon",
+  "Six sides, flat top and bottom. honeycomb, tile",
+  "insert hexagon" },
+
+{ "Star",
+  "Five points, one straight up. favourite, rating",
+  "insert star\r\n20px top,right" },
+
+{ "Line",
+  "From one corner of its space to the other; flat when only a top is given. rule, divider, separator",
+  "insert line\r\n20px left,right\r\n60px top" },
+};
+
+#define SHAPE_CHEAT_COUNT ((int)(sizeof(SHAPE_CHEATS) / sizeof(SHAPE_CHEATS[0])))
+
+/* which page the cheat sheet is showing: 0 everything, 1 the shapes */
+static int g_cheatPage;
+#define CUR_CHEATS      (g_cheatPage ? SHAPE_CHEATS : CHEATS)
+#define CUR_CHEAT_COUNT (g_cheatPage ? SHAPE_CHEAT_COUNT : CHEAT_COUNT)
+#define CHEAT_MAX       (CHEAT_COUNT > SHAPE_CHEAT_COUNT ? CHEAT_COUNT : SHAPE_CHEAT_COUNT)
+
 
 #endif /* ADDA_GUI_CHEATSHEET_H */

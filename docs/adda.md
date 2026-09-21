@@ -281,7 +281,24 @@ the side you did give - and a box with neither of a pair is centred that way.
 Because shapes are measured from the edges, they stretch when the window is
 resized.
 
-The shapes are `insert rounded box` and `insert box` (square corners).
+The shapes are:
+
+| Shape | What it looks like |
+|---|---|
+| `box` | Square corners |
+| `rounded box` | Soft corners |
+| `pill` | A box with fully round ends |
+| `circle` | The biggest circle that fits its space |
+| `oval` | Stretches to fill its space |
+| `triangle` | Pointing up |
+| `diamond` | A square on its point |
+| `hexagon` | Six sides, flat top and bottom |
+| `star` | Five points, one straight up |
+| `line` | From one corner of its space to the other |
+
+The round and pointed ones (circle, triangle, diamond, hexagon, star) start
+100px square rather than 200px wide. A `line` given only a top lies flat.
+In the window's cheat sheet, **All shapes ->** opens a page with every one.
 
 ## 8. Functions
 
