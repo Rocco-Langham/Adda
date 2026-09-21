@@ -30,6 +30,7 @@ typedef struct {
 typedef struct { P *p; uint32_t i, end; } E;
 
 #define STOP_END  1
+#define STOP_DELAY 4          /* `delay end` closes a delay block too */
 #define STOP_ELSE 2
 
 static Node *parse_run(P *p, uint32_t from, uint32_t to);
@@ -743,6 +744,31 @@ static Node *parse_if(P *p)
     return n;
 }
 
+/*   delay - 1500        wait 1500 milliseconds (1000 is a second),
+ *   print hello         then run everything down to
+ *   delay end           here - a plain `end` closes it too
+ * The dash is optional: `delay 1500` and `delay - [wait]` work as well. */
+static Node *parse_delay(P *p)
+{
+    uint32_t s = p->i, e = line_end(p, s);
+    uint32_t line = p->t[s].line;
+    uint32_t from = s + 1;
+    Node *n = node(N_DELAY, line);
+
+    if (from < e && p->t[from].kind == TK_MINUS) from++;
+    if (from >= e)
+        adda_error_at(p->t[s].start, line,
+                      "delay needs a time in milliseconds, as in: delay - 1500");
+    n->a = parse_value(p, from, e);
+    end_line(p, e);
+    p->depth++;
+    n->b = parse_block(p, STOP_END | STOP_DELAY, "delay", line);
+    p->depth--;
+    if (word_at(p, p->i, "delay")) end_line(p, p->i + 2);    /* delay end */
+    else expect_end(p, "delay", line);
+    return n;
+}
+
 static Node *parse_while(P *p)
 {
     uint32_t s = p->i, e = line_end(p, s);
@@ -922,6 +948,9 @@ static Node *statement(P *p)
     }
     if (word_at(p, s, "if"))     return parse_if(p);
     if (word_at(p, s, "while"))  return parse_while(p);
+    if (word_at(p, s, "delay") && !word_at(p, s + 1, "end")) return parse_delay(p);
+    if (word_at(p, s, "delay"))
+        adda_error_at(p->t[s].start, line, "there is no open delay for this 'delay end'");
     if (word_at(p, s, "for"))    return parse_foreach(p);
     if (word_at(p, s, "define")) return parse_define(p);
     if (word_at(p, s, "add"))    return parse_add(p, s, e);
@@ -975,6 +1004,8 @@ static Node *parse_block(P *p, int stops, const char *opener, uint32_t opener_li
             return blk;
         }
         if ((stops & STOP_END)  && word_at(p, p->i, "end"))  return blk;
+        if ((stops & STOP_DELAY) && word_at(p, p->i, "delay") &&
+            word_at(p, p->i + 1, "end")) return blk;
         if ((stops & STOP_ELSE) && word_at(p, p->i, "else")) return blk;
 
         add_kid(blk, statement(p));

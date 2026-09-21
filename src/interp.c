@@ -3,10 +3,20 @@
  * Scopes are flat arrays searched by pointer comparison: source identifiers are
  * interned, and a scope holds a handful of names, so a linear scan beats
  * hashing and costs a fraction of the code. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 199309L   /* nanosleep, under -std=c99 */
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "adda.h"
+
+#ifdef _WIN32
+/* just Sleep, rather than all of windows.h and its macros */
+__declspec(dllimport) void __stdcall Sleep(unsigned long ms);
+#else
+#include <time.h>         /* nanosleep */
+#endif
 
 typedef struct Scope {
     struct Scope *parent;
@@ -560,6 +570,29 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             if (as_condition(eval(n->a, sc), n->line)) return exec(n->b, sc, ret);
             if (n->c) return exec(n->c, sc, ret);
             return FLOW_NORMAL;
+
+        case N_DELAY: {
+            Value ms = eval(n->a, sc);
+            double wait;
+            if (!IS_NUMBER(ms))
+                adda_error(n->line, "delay needs a number of milliseconds, but got %s",
+                           type_name(ms.type));
+            wait = ms.as.num;
+            if (wait < 0)
+                adda_error(n->line, "delay cannot wait a negative time");
+            fflush(stdout);              /* what came before shows before the wait */
+#ifdef _WIN32
+            Sleep((unsigned long)wait);
+#else
+            {
+                struct timespec ts;
+                ts.tv_sec = (time_t)(wait / 1000);
+                ts.tv_nsec = (long)((wait - (double)ts.tv_sec * 1000) * 1000000);
+                while (nanosleep(&ts, &ts) != 0) {}    /* resume if interrupted */
+            }
+#endif
+            return exec(n->b, sc, ret);
+        }
 
         case N_WHILE:
             while (as_condition(eval(n->a, sc), n->line)) {

@@ -1,0 +1,19 @@
+# delay waits, then runs its block. Short times keep the test fast.
+print before
+delay - 10
+    print hello
+    print hi
+delay end
+print after
+delay 5
+    print no dash, plain end
+end
+[wait] = 5
+delay - [wait]
+    print from a variable
+    delay - 5
+        print nested
+    delay end
+delay end
+[delay] = still a fine variable name
+print [delay]

@@ -1,0 +1,9 @@
+before
+hello
+hi
+after
+no dash, plain end
+from a variable
+nested
+still a fine variable name
+exit: 0

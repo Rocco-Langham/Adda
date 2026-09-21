@@ -221,6 +221,25 @@ while [count] < 5
 end
 ```
 
+### Waiting
+
+`delay` waits, then runs the lines under it. The time is in milliseconds, so
+1000 is one second:
+
+```adda
+print Get ready
+delay - 1500
+    print Go!
+    print Run!
+delay end
+print This comes straight after Run!
+```
+
+The wait starts from wherever the program has got to. Anything printed before
+it has already appeared, so this is how you pace output. The dash is optional
+(`delay 1500`), the time can be a variable (`delay - [wait]`), a plain `end`
+closes the block as well as `delay end`, and one delay can sit inside another.
+
 ## 8. Functions
 
 ```adda
@@ -472,7 +491,7 @@ file and Delete moves it to the Trash. The Explorer looks in the folder
 
 ## 14. Full list of words Adda reserves
 
-`print` `if` `else` `while` `for` `each` `in` `define` `with` `return` `call`
+`print` `if` `else` `while` `for` `each` `in` `delay` `define` `with` `return` `call`
 `add` `to` `remove` `end` `list` `map` `item` `length` `has` `ask` `of`
 `is` `not` `and` `or` `true` `false` `nothing`
 

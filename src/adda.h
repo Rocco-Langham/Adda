@@ -204,7 +204,7 @@ typedef enum {
     N_CALL,
     /* statements */
     N_BLOCK, N_ASSIGN, N_PRINT, N_IF, N_WHILE, N_FOREACH,
-    N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT
+    N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY
 } NodeKind;
 
 struct Node {

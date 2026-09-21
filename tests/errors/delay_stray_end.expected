@@ -1,0 +1,4 @@
+tests/errors/delay_stray_end.adda:2: there is no open delay for this 'delay end'
+     2 | delay end
+       | ^
+exit: 65

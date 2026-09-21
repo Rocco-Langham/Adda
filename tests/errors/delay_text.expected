@@ -1,0 +1,4 @@
+tests/errors/delay_text.adda:1: delay needs a number of milliseconds, but got text
+     1 | delay - soon
+       | ^
+exit: 65

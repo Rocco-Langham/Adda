@@ -168,6 +168,10 @@ static const Cheat CHEATS[] = {
   "Keys come back in the order you added them. iterate, keys",
   "for each [key] in [person]\r\n    print [key] is {item [key] of [person]}\r\nend" },
 
+{ "Wait before doing something",
+  "Waits this many milliseconds (1000 is a second), then runs the lines under it. pause, sleep, wait, timer, later",
+  "delay - 1500\r\n    print hello\r\n    print hi\r\ndelay end" },
+
 /* ---- functions ----------------------------------------------------- */
 { "Make a function",
   "define ... with names the inputs, each in square brackets. procedure, method, subroutine",
