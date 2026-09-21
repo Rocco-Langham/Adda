@@ -47,6 +47,7 @@
 #define ID_FIND      1005
 #define ID_FILES     1006
 #define ID_POLL      1           /* timer */
+#define ID_ANIM      2           /* timer: click animations */
 
 /* settings / cheat popups */
 #define ID_CHEATFIND 1101
@@ -153,6 +154,14 @@ static const int AB_ICON[AB_COUNT] = {
 
 static int  g_view = AB_EXPLORER;   /* which panel view, or -1 when collapsed */
 static int  g_abHot = -1;           /* activity item under the pointer */
+
+/* Click animation: whatever was pressed last shrinks a little and flashes
+ * toward the accent colour, then eases back over PRESS_MS. */
+#define PRESS_MS  220
+static int   g_abPress = -1;        /* activity item being animated        */
+static DWORD g_abPressAt;
+static int   g_rowPress = -1;       /* settings row being animated         */
+static DWORD g_rowPressAt;
 static RECT g_abRect[AB_COUNT];
 
 /* ── panes ───────────────────────────────────────────────────────── */
@@ -556,6 +565,22 @@ static void round_child(HWND h, int radius)
     GetClientRect(h, &r);
     SetWindowRgn(h, CreateRoundRectRgn(0, 0, r.right + 1, r.bottom + 1,
                                        radius * 2, radius * 2), TRUE);
+}
+
+static COLORREF blend(COLORREF a, COLORREF b, double t)
+{
+    return RGB((int)(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * t),
+               (int)(GetGValue(a) + (GetGValue(b) - GetGValue(a)) * t),
+               (int)(GetBValue(a) + (GetBValue(b) - GetBValue(a)) * t));
+}
+
+/* 1 at the moment of the click, easing to 0 as it finishes */
+static double press_amount(DWORD at)
+{
+    double t = (double)(GetTickCount() - at) / PRESS_MS;
+    if (t >= 1) return 0;
+    t = 1 - t;
+    return t * t;
 }
 
 static void text_at(HDC hdc, RECT r, const char *s, HFONT font,
@@ -1510,7 +1535,8 @@ static void paint_main(HWND hwnd, HDC hdc)
 
     for (i = 0; i < AB_COUNT; i++) {
         RECT box = g_abRect[i];
-        RECT icon;
+        RECT icon, pill;
+        int shrink = 0;
         BOOL active = (i == g_view);
         /* Run only makes sense while idle, Stop only while running */
         BOOL disabled = (i == AB_RUN && g_running) || (i == AB_STOP && !g_running);
@@ -1532,10 +1558,20 @@ static void paint_main(HWND hwnd, HDC hdc)
             fill_rect(hdc, sep, g_t.abIconDim);
         }
 
-        if (hot) {
-            RECT pill = box;
-            InflateRect(&pill, -S(5), -S(3));
-            round_fill(hdc, pill, cell, RADIUS);
+        {
+            double k = (i == g_abPress) ? press_amount(g_abPressAt) : 0;
+            if (k > 0) {
+                int in = (int)(S(4) * k);
+                cell = blend(hot ? g_t.abHover : g_t.abBg, g_t.accent, 0.35 * k);
+                pill = box;
+                InflateRect(&pill, -S(5) - in, -S(3) - in);
+                round_fill(hdc, pill, cell, RADIUS);
+                shrink = (int)(S(2) * k);
+            } else if (hot) {
+                pill = box;
+                InflateRect(&pill, -S(5), -S(3));
+                round_fill(hdc, pill, cell, RADIUS);
+            }
         }
 
         if (active) {
@@ -1547,7 +1583,7 @@ static void paint_main(HWND hwnd, HDC hdc)
         }
 
         icon = box;
-        InflateRect(&icon, -S(12), -S(12));
+        InflateRect(&icon, -S(12) - shrink, -S(12) - shrink);
         /* the icon is blitted opaque, so it must be given the very colour the
          * cell was just filled with or it shows as a square patch */
         draw_icon(hdc, icon, AB_ICON[i], fg, cell);
@@ -1678,8 +1714,17 @@ static void settings_paint(HWND hwnd, HDC hdc)
         row.top = y;
         row.bottom = y + S(52);
 
-        if (i == g_pick)           round_fill(hdc, row, g_t.sel, RADIUS_BIG);
-        else if (i == g_setRowHot) round_fill(hdc, row, g_t.ghostHot, RADIUS_BIG);
+        {
+            double k = (i == g_rowPress) ? press_amount(g_rowPressAt) : 0;
+            COLORREF base = (i == g_pick) ? g_t.sel
+                          : (i == g_setRowHot || k > 0) ? g_t.ghostHot : g_t.surface;
+            RECT pill = row;
+            if (k > 0) {
+                InflateRect(&pill, -(int)(S(4) * k), -(int)(S(2) * k));
+                base = blend(base, g_t.accent, 0.3 * k);
+            }
+            if (base != g_t.surface) round_fill(hdc, pill, base, RADIUS_BIG);
+        }
 
         /* three chips that say what the theme looks like */
         chips[0] = t.abBg;
@@ -1776,6 +1821,9 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
         p.x = GET_X_LPARAM(l); p.y = GET_Y_LPARAM(l);
         row = settings_row_at(hwnd, p);
         if (row >= 0) {
+            g_rowPress = row;
+            g_rowPressAt = GetTickCount();
+            SetTimer(hwnd, ID_ANIM, 15, NULL);
             g_pick = row;
             save_pick();
             apply_theme(hwndMain);
@@ -1783,6 +1831,17 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
         }
         return 0;
     }
+
+    case WM_TIMER:
+        if (w == ID_ANIM) {
+            if (press_amount(g_rowPressAt) <= 0) {
+                KillTimer(hwnd, ID_ANIM);
+                g_rowPress = -1;
+            }
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        break;
 
     case WM_KEYDOWN:
         if (w == VK_ESCAPE) { DestroyWindow(hwnd); return 0; }
@@ -2280,7 +2339,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
         at = ab_hit(p);
-        if (at >= 0) { ab_click(hwnd, at); return 0; }
+        if (at >= 0) {
+            g_abPress = at;
+            g_abPressAt = GetTickCount();
+            SetTimer(hwnd, ID_ANIM, 15, NULL);
+            ab_click(hwnd, at);
+            InvalidateRect(hwnd, &g_abRect[at], FALSE);
+            return 0;
+        }
         break;
     }
 
@@ -2316,6 +2382,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     /* ── output while the program runs ───────────────────────────── */
     case WM_TIMER:
+        if (wParam == ID_ANIM) {
+            if (g_abPress >= 0) InvalidateRect(hwnd, &g_abRect[g_abPress], FALSE);
+            if (press_amount(g_abPressAt) <= 0) {
+                KillTimer(hwnd, ID_ANIM);
+                g_abPress = -1;
+            }
+            return 0;
+        }
         if (wParam == ID_POLL && g_running) {
             pump_stdin();          /* whatever the pipe would not take last time */
             drain(g_out);

@@ -268,6 +268,37 @@ static unsigned mix(unsigned a, unsigned b)
                ((a & 0xff) + (b & 0xff)) / 2);
 }
 
+static unsigned blend(unsigned a, unsigned b, double t)
+{
+    int ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+    int br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+    return RGB((int)(ar + (br - ar) * t), (int)(ag + (bg - ag) * t),
+               (int)(ab + (bb - ab) * t));
+}
+
+/* Click animation: whatever was pressed last shrinks a little and flashes
+ * toward the accent colour, then eases back over PRESS_SECS. One timer
+ * drives every view and stops itself once nothing is moving. */
+#define PRESS_SECS  0.22
+enum { PRESS_NONE, PRESS_AB, PRESS_ADD, PRESS_ROW };
+static int      g_pressKind = PRESS_NONE;
+static int      g_pressIdx;
+static CFTimeInterval g_pressAt;
+static NSTimer *g_anim;
+
+/* 1 at the moment of the click, easing to 0 as it finishes */
+static double press_amount(int kind, int idx)
+{
+    double t;
+    if (g_pressKind != kind || g_pressIdx != idx) return 0;
+    t = (CACurrentMediaTime() - g_pressAt) / PRESS_SECS;
+    if (t >= 1) return 0;
+    t = 1 - t;
+    return t * t;
+}
+
+static void press(int kind, int idx);
+
 static BOOL system_is_dark(void)
 {
     NSAppearanceName best = [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:
@@ -1368,13 +1399,19 @@ static void paint_main(void)
             fill_rect(NSMakeRect(NSMinX(box) + 12, NSMinY(box) - 3, NSWidth(box) - 24, 1),
                       g_t.abIconDim);
 
-        if (hot) round_fill(NSInsetRect(box, 5, 3), cell, RADIUS);
+        double k = press_amount(PRESS_AB, i);
+        if (k > 0) {
+            cell = blend(cell, g_t.accent, 0.35 * k);
+            round_fill(NSInsetRect(box, 5 + 4 * k, 3 + 4 * k), cell, RADIUS);
+        } else if (hot) {
+            round_fill(NSInsetRect(box, 5, 3), cell, RADIUS);
+        }
 
         if (active)
             round_fill(NSMakeRect(NSMinX(box) + 1, NSMinY(box) + 8, 3, NSHeight(box) - 16),
                        g_t.abIcon, 1.5);
 
-        draw_icon(NSInsetRect(box, 12, 12), AB_ICON[i], fg, cell);
+        draw_icon(NSInsetRect(box, 12 + 2 * k, 12 + 2 * k), AB_ICON[i], fg, cell);
     }
 
     /* side panel */
@@ -1389,8 +1426,10 @@ static void paint_main(void)
 
         if (g_view == AB_EXPLORER) {
             unsigned addFg = g_addHot ? g_t.text : g_t.muted;
-            if (g_addHot) round_fill(NSInsetRect(g_addRect, -3, -3), g_t.ghostHot, 6);
-            draw_icon(NSInsetRect(g_addRect, 2, 2), ICON_PLUS, addFg, g_addHot ? g_t.ghostHot : g_t.bg);
+            double k = press_amount(PRESS_ADD, 0);
+            unsigned addBg = (g_addHot || k > 0) ? blend(g_t.ghostHot, g_t.accent, 0.35 * k) : g_t.bg;
+            if (addBg != g_t.bg) round_fill(NSInsetRect(g_addRect, -3 + 2 * k, -3 + 2 * k), addBg, 6);
+            draw_icon(NSInsetRect(g_addRect, 2 + k, 2 + k), ICON_PLUS, addFg, addBg);
         }
 
         fill_rect(NSMakeRect(NSMaxX(g_panelRect) - 1, 0, 1, NSHeight(rc)), g_t.border);
@@ -1448,8 +1487,11 @@ static void settings_paint(NSRect rc)
         /* three chips that say what the theme looks like */
         unsigned chips[3] = { t.abBg, t.surface, t.accent };
 
-        if (i == g_pick)           round_fill(row, g_t.sel, RADIUS_BIG);
-        else if (i == g_setRowHot) round_fill(row, g_t.ghostHot, RADIUS_BIG);
+        double k = press_amount(PRESS_ROW, i);
+        if (i == g_pick || i == g_setRowHot || k > 0) {
+            unsigned base = (i == g_pick) ? g_t.sel : g_t.ghostHot;
+            round_fill(NSInsetRect(row, 4 * k, 2 * k), blend(base, g_t.accent, 0.3 * k), RADIUS_BIG);
+        }
 
         for (j = 0; j < 3; j++) {
             NSRect sw = NSMakeRect(NSMinX(row) + 10 + j * 16, NSMinY(row) + 18, 14, 16);
@@ -1928,6 +1970,7 @@ static void build_menu(void)
     int at;
 
     if (g_view == AB_EXPLORER && NSPointInRect(p, g_addRect)) {
+        press(PRESS_ADD, 0);
         show_add_menu(p);
         return;
     }
@@ -1942,7 +1985,10 @@ static void build_menu(void)
         return;
     }
     at = ab_hit(p);
-    if (at >= 0) ab_click(at);
+    if (at >= 0) {
+        press(PRESS_AB, at);
+        ab_click(at);
+    }
 }
 
 - (void)mouseDragged:(NSEvent *)e
@@ -2095,6 +2141,7 @@ static void build_menu(void)
 {
     int row = settings_row_at([self convertPoint:e.locationInWindow fromView:nil]);
     if (row >= 0) {
+        press(PRESS_ROW, row);
         g_pick = row;
         save_pick();
         apply_theme();
@@ -2132,6 +2179,25 @@ static void build_menu(void)
 - (void)cancelOperation:(id)sender { (void)sender; [self close]; }
 
 @end
+
+static void press(int kind, int idx)
+{
+    g_pressKind = kind;
+    g_pressIdx = idx;
+    g_pressAt = CACurrentMediaTime();
+    if (g_anim) return;
+    g_anim = [NSTimer timerWithTimeInterval:1.0 / 60 repeats:YES block:^(NSTimer *t) {
+        g_main.needsDisplay = YES;
+        g_settingsView.needsDisplay = YES;
+        if (CACurrentMediaTime() - g_pressAt >= PRESS_SECS) {
+            [t invalidate];
+            g_anim = nil;
+            g_pressKind = PRESS_NONE;
+        }
+    }];
+    /* common modes, so it keeps going while a menu is tracking */
+    [[NSRunLoop currentRunLoop] addTimer:g_anim forMode:NSRunLoopCommonModes];
+}
 
 /* ═══════════════════════════════════════════════ the controller ══ */
 
