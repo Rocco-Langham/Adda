@@ -435,6 +435,13 @@ Down the left side:
 Clicking the Explorer or Search icon you are already on closes the panel again.
 Whichever theme you pick is remembered for next time.
 
+On a Mac the window is `Adda.app` and works the same way. The keys are the
+Mac's own: **⌘R** or **⌘Return** runs, **⌘.** stops, Return answers an `ask`,
+**⌃⌘F** (or the green button) goes full screen, and Settings offers
+**Follow macOS** in place of Follow Windows. In the Explorer, Return renames a
+file and Delete moves it to the Trash. The Explorer looks in the folder
+`Adda.app` sits in and in the `examples/` folder next to it.
+
 ## 14. Full list of words Adda reserves
 
 `print` `if` `else` `while` `for` `each` `in` `define` `with` `return` `call`

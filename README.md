@@ -78,6 +78,12 @@ You need a C compiler. On Windows, MSYS2's MinGW gcc works:
 winget install -e --id MSYS2.MSYS2
 ```
 
+On a Mac, Apple's command line tools are enough (no Xcode needed):
+
+```bash
+xcode-select --install
+```
+
 Then, from the repository:
 
 ```bash
@@ -132,8 +138,10 @@ adda> print {total}
 
 ## The window
 
-`./build.sh` also produces `adda-gui`. Put it next to `adda.exe` and
-double-click it.
+`./build.sh` also produces the window. On Windows that is `adda-gui`: put it
+next to `adda.exe` and double-click it. On a Mac it is `Adda.app`, with `adda`
+already inside it: double-click it, or `open Adda.app`. `./gui.sh` builds and
+opens it on either.
 
 ```
 ┌────┬────────────┬──────────────────────────────────┐
@@ -165,6 +173,15 @@ what you want to do and double-click an entry to drop the code into your
 program. The **cog** opens Settings, where **Themes** offers Follow Windows,
 Light, Dark, Beige and **Abyss** (the VS Code theme, using its real colours).
 Your choice is remembered.
+
+On a Mac the window is the same, with the Mac's keys:
+
+| Windows | Mac |
+|---|---|
+| Ctrl+Enter | ⌘R or ⌘Return runs, ⌘. stops |
+| F11 | ⌃⌘F, or the green button, for full screen |
+| F2 / Del on a file | Return or F2 renames, Delete moves it to the Trash |
+| Follow Windows | Follow macOS |
 
 ## The whole language
 

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Info.plist for Adda.app, the Mac GUI. build.sh copies it into the bundle;
+     it does for the Mac what adda-gui.manifest does for Windows. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Adda</string>
+    <key>CFBundleDisplayName</key>
+    <string>Adda</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.rocco-langham.adda</string>
+    <key>CFBundleExecutable</key>
+    <string>adda-gui</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+</dict>
+</plist>

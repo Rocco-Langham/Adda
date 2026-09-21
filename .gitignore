@@ -6,3 +6,5 @@ adda-test.exe
 adda-gui
 adda-gui.exe
 .claude/settings.local.json
+Adda.app/
+*.dSYM/

@@ -44,14 +44,30 @@ esac
     src/lexer.c src/parser.c src/interp.c src/repl.c src/main.c -lm
 echo "built ./adda ($MODE)"
 
-# GUI (Windows only). Same warning flags as everything else.
-# The manifest resource is what gives themed controls and DPI awareness;
-# without it the buttons are drawn in the Windows 95 style and the window is
-# stretched and blurry on a high-DPI screen.
+# GUI. Same warning flags as everything else.
+#
+# Windows: the manifest resource is what gives themed controls and DPI
+# awareness; without it the buttons are drawn in the Windows 95 style and the
+# window is stretched and blurry on a high-DPI screen.
+#
+# Mac: gui_mac.m is Objective-C, which -std=c99 would refuse, so that one flag
+# is left off. An app is only a folder, so Adda.app is put together by hand:
+# the GUI, the adda it runs, and Info.plist. Then it is signed ad hoc, which
+# is all a Mac asks of an app built on the Mac it runs on.
 if [ "$(uname -o 2>/dev/null)" = "Msys" ] || [ "$OS" = "Windows_NT" ]; then
     "${WINDRES:-windres}" -I src src/adda-gui.rc -o adda-gui-res.o
     "$CC" $WARN $DEFS $FLAGS -mwindows -o adda-gui \
         src/gui.c adda-gui-res.o \
         -lcomctl32 -ldwmapi -luxtheme -lgdi32 -lshell32
     echo "built ./adda-gui ($MODE)"
+elif [ "$(uname -s)" = "Darwin" ]; then
+    "$CC" ${WARN#-std=c99 } $FLAGS -fobjc-arc -mmacosx-version-min=11.0 \
+        -o adda-gui src/gui_mac.m -framework Cocoa -framework QuartzCore
+    rm -rf Adda.app
+    mkdir -p Adda.app/Contents/MacOS
+    cp src/adda-gui.plist Adda.app/Contents/Info.plist
+    cp adda-gui adda Adda.app/Contents/MacOS/
+    codesign --force --sign - Adda.app/Contents/MacOS/adda
+    codesign --force --sign - Adda.app
+    echo "built ./Adda.app ($MODE)"
 fi
