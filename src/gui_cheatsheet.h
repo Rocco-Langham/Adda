@@ -172,6 +172,10 @@ static const Cheat CHEATS[] = {
   "Waits this many milliseconds (1000 is a second), then runs the lines under it. pause, sleep, wait, timer, later",
   "delay - 1500\r\n    print hello\r\n    print hi\r\ndelay end" },
 
+{ "Open a blank window",
+  "Opens an empty window with this title; the program waits until it is closed. app, application, window, gui, screen",
+  "openApplication My App" },
+
 /* ---- functions ----------------------------------------------------- */
 { "Make a function",
   "define ... with names the inputs, each in square brackets. procedure, method, subroutine",

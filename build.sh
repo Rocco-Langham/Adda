@@ -39,9 +39,21 @@ esac
 
 # interpreter (listed by hand, because gui.c has its own entry point and must
 # not be linked into the console build)
-"$CC" $WARN $DEFS $FLAGS -o adda \
-    src/arena.c src/error.c src/value.c src/map.c \
-    src/lexer.c src/parser.c src/interp.c src/repl.c src/main.c -lm
+#
+# openApplication needs the platform's own windows, so one extra file comes
+# along per platform. On a Mac it is Objective-C, compiled on its own (without
+# -std=c99) and linked in with Cocoa.
+CORE="src/arena.c src/error.c src/value.c src/map.c \
+      src/lexer.c src/parser.c src/interp.c src/repl.c src/main.c"
+if [ "$(uname -o 2>/dev/null)" = "Msys" ] || [ "$OS" = "Windows_NT" ]; then
+    "$CC" $WARN $DEFS $FLAGS -o adda $CORE src/window_win.c -lm -luser32 -lgdi32
+elif [ "$(uname -s)" = "Darwin" ]; then
+    "$CC" ${WARN#-std=c99 } $FLAGS -fobjc-arc -mmacosx-version-min=11.0 \
+        -c src/window_mac.m -o window_mac.o
+    "$CC" $WARN $DEFS $FLAGS -o adda $CORE window_mac.o -lm -framework Cocoa
+else
+    "$CC" $WARN $DEFS $FLAGS -o adda $CORE src/window_none.c -lm
+fi
 echo "built ./adda ($MODE)"
 
 # GUI. Same warning flags as everything else.

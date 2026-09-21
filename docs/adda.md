@@ -240,6 +240,19 @@ it has already appeared, so this is how you pace output. The dash is optional
 (`delay 1500`), the time can be a variable (`delay - [wait]`), a plain `end`
 closes the block as well as `delay end`, and one delay can sit inside another.
 
+### Opening a window
+
+`openApplication` opens a new, blank window - the start of an app of your own.
+Whatever follows it on the line is the window's title:
+
+```adda
+print Opening the window...
+openApplication My Game
+print The window was closed
+```
+
+The program waits on that line until you close the window, then carries on.
+
 ## 8. Functions
 
 ```adda
@@ -491,7 +504,7 @@ file and Delete moves it to the Trash. The Explorer looks in the folder
 
 ## 14. Full list of words Adda reserves
 
-`print` `if` `else` `while` `for` `each` `in` `delay` `define` `with` `return` `call`
+`print` `if` `else` `while` `for` `each` `in` `delay` `openApplication` `define` `with` `return` `call`
 `add` `to` `remove` `end` `list` `map` `item` `length` `has` `ask` `of`
 `is` `not` `and` `or` `true` `false` `nothing`
 

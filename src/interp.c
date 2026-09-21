@@ -571,6 +571,18 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             if (n->c) return exec(n->c, sc, ret);
             return FLOW_NORMAL;
 
+        case N_OPENAPP: {
+            const char *title = "Adda";
+            if (n->a) {
+                Value t = eval(n->a, sc);
+                title = value_to_text(t)->bytes;
+            }
+            fflush(stdout);              /* what came before shows first */
+            if (!adda_open_window(title))
+                adda_error(n->line, "openApplication cannot open a window on this computer");
+            return FLOW_NORMAL;
+        }
+
         case N_DELAY: {
             Value ms = eval(n->a, sc);
             double wait;

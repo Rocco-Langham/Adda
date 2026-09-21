@@ -175,6 +175,11 @@ typedef struct {
 } TokenList;
 
 TokenList lex(const char *src);
+
+/* openApplication: opens a blank window titled `title` and returns once it has
+ * been closed; false if this system has no window Adda can open. One per
+ * platform: window_mac.m, window_win.c, window_none.c. */
+bool      adda_open_window(const char *title);
 /* Length of a `[name]` starting at p (brackets included), or 0. It means the
  * same as {name}: the value of the variable called name. */
 uint32_t  adda_bracket_name(const char *p);
@@ -204,7 +209,7 @@ typedef enum {
     N_CALL,
     /* statements */
     N_BLOCK, N_ASSIGN, N_PRINT, N_IF, N_WHILE, N_FOREACH,
-    N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY
+    N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY, N_OPENAPP
 } NodeKind;
 
 struct Node {

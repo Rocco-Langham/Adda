@@ -949,6 +949,14 @@ static Node *statement(P *p)
     if (word_at(p, s, "if"))     return parse_if(p);
     if (word_at(p, s, "while"))  return parse_while(p);
     if (word_at(p, s, "delay") && !word_at(p, s + 1, "end")) return parse_delay(p);
+
+    /* openApplication [title]: a blank window; the program waits for it to close */
+    if (word_at(p, s, "openApplication")) {
+        Node *n = node(N_OPENAPP, line);
+        if (e > s + 1) n->a = parse_run(p, s + 1, e);
+        end_line(p, e);
+        return n;
+    }
     if (word_at(p, s, "delay"))
         adda_error_at(p->t[s].start, line, "there is no open delay for this 'delay end'");
     if (word_at(p, s, "for"))    return parse_foreach(p);
