@@ -176,6 +176,14 @@ static const Cheat CHEATS[] = {
   "Opens a window with this title. Everything printed after it appears in the middle of the window. app, application, window, gui, screen",
   "openApplication My App\r\nprint Hello from my app" },
 
+{ "Draw a rounded box in the window",
+  "After openApplication. Each 3px line says how far the box stops from those edges. shape, rectangle, panel, card",
+  "insert rounded box\r\n3px top,right,left" },
+
+{ "Draw a square box in the window",
+  "Like a rounded box with sharp corners. shape, rectangle, square",
+  "insert box\r\n20px top,bottom\r\n40px left,right" },
+
 /* ---- functions ----------------------------------------------------- */
 { "Make a function",
   "define ... with names the inputs, each in square brackets. procedure, method, subroutine",

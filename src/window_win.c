@@ -14,6 +14,17 @@ static char *g_text;            /* every printed line, joined with \r\n */
 static size_t g_len;
 static HFONT g_font;
 
+typedef struct { int kind; double inset[4]; } Shape;
+static Shape *g_shapes;
+static int    g_shapeCount;
+
+static COLORREF mix(COLORREF a, COLORREF b, int pctB)
+{
+    return RGB((GetRValue(a) * (100 - pctB) + GetRValue(b) * pctB) / 100,
+               (GetGValue(a) * (100 - pctB) + GetGValue(b) * pctB) / 100,
+               (GetBValue(a) * (100 - pctB) + GetBValue(b) * pctB) / 100);
+}
+
 static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 {
     switch (msg) {
@@ -25,6 +36,26 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 
         GetClientRect(h, &rc);
         FillRect(dc, &rc, (HBRUSH)(COLOR_WINDOW + 1));
+
+        /* shapes first, so the text sits on top of them */
+        if (g_shapeCount) {
+            COLORREF bg = GetSysColor(COLOR_WINDOW), fg = GetSysColor(COLOR_WINDOWTEXT);
+            HBRUSH fill = CreateSolidBrush(mix(bg, fg, 10));
+            HPEN edge = CreatePen(PS_SOLID, 1, mix(bg, fg, 30));
+            HGDIOBJ ob = SelectObject(dc, fill), op = SelectObject(dc, edge);
+            int i;
+            for (i = 0; i < g_shapeCount; i++) {
+                double r[4];
+                int x, y, w, ht, round;
+                adda_shape_rect(g_shapes[i].inset, rc.right, rc.bottom, r);
+                x = (int)r[0]; y = (int)r[1]; w = (int)r[2]; ht = (int)r[3];
+                round = g_shapes[i].kind == SHAPE_ROUNDED_BOX ? 24 : 0;
+                RoundRect(dc, x, y, x + w, y + ht, round, round);
+            }
+            SelectObject(dc, ob); SelectObject(dc, op);
+            DeleteObject(fill); DeleteObject(edge);
+        }
+
         if (g_len) {
             old = SelectObject(dc, g_font);
             SetBkMode(dc, TRANSPARENT);
@@ -105,6 +136,19 @@ void adda_window_print(const char *text, size_t len)
     memcpy(g_text + g_len, text, len);
     g_len += len;
     g_text[g_len] = '\0';
+    InvalidateRect(g_window, NULL, FALSE);
+    UpdateWindow(g_window);
+    pump();
+}
+
+void adda_window_shape(int kind, const double inset[4])
+{
+    Shape *grown = realloc(g_shapes, sizeof *g_shapes * (size_t)(g_shapeCount + 1));
+    if (!grown) return;
+    g_shapes = grown;
+    g_shapes[g_shapeCount].kind = kind;
+    memcpy(g_shapes[g_shapeCount].inset, inset, sizeof g_shapes[0].inset);
+    g_shapeCount++;
     InvalidateRect(g_window, NULL, FALSE);
     UpdateWindow(g_window);
     pump();

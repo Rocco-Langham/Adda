@@ -13,7 +13,9 @@
  * That single decision is what lets `name = Rocco` and `next = age + 1` live
  * in the same language without quotes.
  */
+#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "adda.h"
 
@@ -769,6 +771,75 @@ static Node *parse_delay(P *p)
     return n;
 }
 
+/*   insert rounded box          a shape in the app window
+ *   3px top,right,left          stop 3px from those edges of the window
+ *   20px bottom                 ...as many of these lines as you like
+ * `insert box` is the same with square corners. */
+static bool px_word(const Token *t, double *out)
+{
+    char buf[32];
+    uint32_t i;
+    if (t->kind != TK_WORD || t->len < 3 || t->len >= sizeof buf) return false;
+    if (memcmp(t->start + t->len - 2, "px", 2) != 0) return false;
+    for (i = 0; i + 2 < t->len; i++)
+        if (!isdigit((unsigned char)t->start[i]) && t->start[i] != '.') return false;
+    memcpy(buf, t->start, t->len - 2);
+    buf[t->len - 2] = '\0';
+    *out = atof(buf);
+    return true;
+}
+
+static Node *parse_insert(P *p)
+{
+    uint32_t s = p->i, e = line_end(p, s);
+    uint32_t line = p->t[s].line;
+    Node *n = node(N_SHAPE, line);
+    int k;
+
+    if (word_at(p, s + 1, "rounded") && word_at(p, s + 2, "box") && e == s + 3)
+        n->op = SHAPE_ROUNDED_BOX;
+    else if (word_at(p, s + 1, "box") && e == s + 2)
+        n->op = SHAPE_BOX;
+    else
+        adda_error_at(p->t[s].start, line,
+                      "insert what? The shapes are: insert box, insert rounded box");
+    for (k = 0; k < 4; k++) {
+        Node *side = node(N_NUMBER, line);
+        side->number = -1;                  /* not given */
+        add_kid(n, side);
+    }
+    end_line(p, e);
+
+    /* the lines straight after it that start with a distance, like 3px */
+    for (;;) {
+        double px;
+        uint32_t i = p->i, le;
+        if (i >= p->n || !px_word(&p->t[i], &px)) break;
+        le = line_end(p, i);
+        i++;
+        if (i >= le)
+            adda_error_at(p->t[p->i].start, p->t[p->i].line,
+                          "which edges? As in: %.*s top,right,left",
+                          (int)p->t[p->i].len, p->t[p->i].start);
+        while (i < le) {
+            const Token *t = &p->t[i];
+            int side = token_is_word(t, "top") ? SIDE_TOP :
+                       token_is_word(t, "right") ? SIDE_RIGHT :
+                       token_is_word(t, "bottom") ? SIDE_BOTTOM :
+                       token_is_word(t, "left") ? SIDE_LEFT : -1;
+            if (side < 0)
+                adda_error_at(t->start, t->line,
+                              "'%.*s' is not an edge - use top, right, bottom or left",
+                              (int)t->len, t->start);
+            n->kids[side]->number = px;
+            i++;
+            if (i < le && p->t[i].kind == TK_COMMA) i++;
+        }
+        end_line(p, le);
+    }
+    return n;
+}
+
 static Node *parse_while(P *p)
 {
     uint32_t s = p->i, e = line_end(p, s);
@@ -949,6 +1020,8 @@ static Node *statement(P *p)
     if (word_at(p, s, "if"))     return parse_if(p);
     if (word_at(p, s, "while"))  return parse_while(p);
     if (word_at(p, s, "delay") && !word_at(p, s + 1, "end")) return parse_delay(p);
+
+    if (word_at(p, s, "insert")) return parse_insert(p);
 
     /* openApplication [title]: a blank window; the program waits for it to close */
     if (word_at(p, s, "openApplication")) {

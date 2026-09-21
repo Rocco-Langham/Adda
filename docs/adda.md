@@ -262,6 +262,27 @@ responding. When the program reaches its end the window stays up until you
 close it; closing it earlier stops the program, as closing an app does.
 Questions from `ask` still appear in the console.
 
+#### Shapes
+
+`insert` draws a shape in the window, behind the text. The lines straight
+after it say how far each edge of the shape stops from that edge of the
+window:
+
+```adda
+openApplication My App
+insert rounded box
+3px top,right,left
+```
+
+That box runs across the top, 3px in from the top, right and left edges.
+Use as many distance lines as you like (`20px bottom`), in any order. An edge
+you leave out gets a default size - 200px wide or 100px tall, measured from
+the side you did give - and a box with neither of a pair is centred that way.
+Because shapes are measured from the edges, they stretch when the window is
+resized.
+
+The shapes are `insert rounded box` and `insert box` (square corners).
+
 ## 8. Functions
 
 ```adda
@@ -519,7 +540,7 @@ file and Delete moves it to the Trash. The Explorer looks in the folder
 
 ## 14. Full list of words Adda reserves
 
-`print` `if` `else` `while` `for` `each` `in` `delay` `openApplication` `define` `with` `return` `call`
+`print` `if` `else` `while` `for` `each` `in` `delay` `openApplication` `insert` `define` `with` `return` `call`
 `add` `to` `remove` `end` `list` `map` `item` `length` `has` `ask` `of`
 `is` `not` `and` `or` `true` `false` `nothing`
 

@@ -13,6 +13,7 @@
 
 @interface AddaCanvas : NSView
 @property (strong) NSMutableArray<NSString *> *lines;
+@property (strong) NSMutableArray<NSArray<NSNumber *> *> *shapes;   /* kind, 4 insets */
 @end
 
 @interface AddaWatcher : NSObject <NSWindowDelegate>
@@ -38,6 +39,26 @@ static bool        g_closed;
     (void)dirty;
     [NSColor.windowBackgroundColor setFill];
     NSRectFill(self.bounds);
+
+    /* shapes first, so the text sits on top of them */
+    for (NSArray<NSNumber *> *sh in self.shapes) {
+        double in[4], r[4];
+        int k;
+        CGFloat radius;
+        NSBezierPath *path;
+        for (k = 0; k < 4; k++) in[k] = sh[(NSUInteger)k + 1].doubleValue;
+        adda_shape_rect(in, NSWidth(self.bounds), NSHeight(self.bounds), r);
+        radius = sh[0].intValue == SHAPE_ROUNDED_BOX ? 12 : 0;
+        if (radius * 2 > r[2]) radius = r[2] / 2;
+        if (radius * 2 > r[3]) radius = r[3] / 2;
+        path = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(r[0], r[1], r[2], r[3])
+                                               xRadius:radius yRadius:radius];
+        [[NSColor.labelColor colorWithAlphaComponent:0.10] setFill];
+        [path fill];
+        [[NSColor.labelColor colorWithAlphaComponent:0.30] setStroke];
+        path.lineWidth = 1;
+        [path stroke];
+    }
     if (!all.length) return;
 
     para.alignment = NSTextAlignmentCenter;
@@ -104,6 +125,7 @@ bool adda_open_window(const char *title)
     if (!g_window) return false;
     g_canvas = [[AddaCanvas alloc] initWithFrame:NSMakeRect(0, 0, 640, 420)];
     g_canvas.lines = [NSMutableArray array];
+    g_canvas.shapes = [NSMutableArray array];
     g_watcher = [AddaWatcher new];
 
     g_window.title = t.length ? t : @"Adda";
@@ -124,6 +146,14 @@ void adda_window_print(const char *text, size_t len)
 {
     NSString *s = [[NSString alloc] initWithBytes:text length:len encoding:NSUTF8StringEncoding];
     [g_canvas.lines addObject:s ? s : @""];
+    g_canvas.needsDisplay = YES;
+    [g_canvas displayIfNeeded];
+    pump([NSDate date]);
+}
+
+void adda_window_shape(int kind, const double inset[4])
+{
+    [g_canvas.shapes addObject:@[ @(kind), @(inset[0]), @(inset[1]), @(inset[2]), @(inset[3]) ]];
     g_canvas.needsDisplay = YES;
     [g_canvas displayIfNeeded];
     pump([NSDate date]);

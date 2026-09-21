@@ -1,0 +1,4 @@
+tests/errors/insert_bad_edge.adda:3: 'middle' is not an edge - use top, right, bottom or left
+     3 | 3px top,middle
+       |         ^
+exit: 65

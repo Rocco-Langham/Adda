@@ -1,0 +1,4 @@
+tests/errors/insert_unknown.adda:1: insert what? The shapes are: insert box, insert rounded box
+     1 | insert triangle
+       | ^
+exit: 65

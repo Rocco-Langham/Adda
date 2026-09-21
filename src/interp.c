@@ -553,6 +553,27 @@ static void do_print(Node *n, Scope *sc)
     fflush(stdout);
 }
 
+void adda_shape_rect(const double in[4], double W, double H, double out[4])
+{
+    const double defW = 200, defH = 100;
+    double x, y, w, h;
+    double l = in[SIDE_LEFT], r = in[SIDE_RIGHT], t = in[SIDE_TOP], b = in[SIDE_BOTTOM];
+
+    if (l >= 0 && r >= 0)  { x = l; w = W - l - r; }
+    else if (l >= 0)       { x = l; w = defW; }
+    else if (r >= 0)       { w = defW; x = W - r - w; }
+    else                   { w = defW; x = (W - w) / 2; }
+
+    if (t >= 0 && b >= 0)  { y = t; h = H - t - b; }
+    else if (t >= 0)       { y = t; h = defH; }
+    else if (b >= 0)       { h = defH; y = H - b - h; }
+    else                   { h = defH; y = (H - h) / 2; }
+
+    out[0] = x; out[1] = y;
+    out[2] = w > 0 ? w : 0;
+    out[3] = h > 0 ? h : 0;
+}
+
 static Flow exec(Node *n, Scope *sc, Value *ret)
 {
     switch (n->kind) {
@@ -577,6 +598,16 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             if (as_condition(eval(n->a, sc), n->line)) return exec(n->b, sc, ret);
             if (n->c) return exec(n->c, sc, ret);
             return FLOW_NORMAL;
+
+        case N_SHAPE: {
+            double inset[4];
+            int k;
+            if (!adda_window_is_open())
+                adda_error(n->line, "insert draws in the app window - put openApplication before it");
+            for (k = 0; k < 4; k++) inset[k] = n->kids[k]->number;
+            adda_window_shape(n->op, inset);
+            return FLOW_NORMAL;
+        }
 
         case N_OPENAPP: {
             const char *title = "Adda";

@@ -184,6 +184,17 @@ bool adda_window_is_open(void);
 void adda_window_print(const char *text, size_t len);  /* one line */
 void adda_window_wait_ms(double ms);   /* a delay that keeps the window alive */
 void adda_window_run(void);            /* at the end: wait for it to close */
+
+/* insert box / insert rounded box. `inset` is how far the box stops from the
+ * window's top, right, bottom and left edges; a negative entry means that
+ * side was not given. Shapes are drawn behind the printed text. */
+enum { SHAPE_BOX, SHAPE_ROUNDED_BOX };
+enum { SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM, SIDE_LEFT };
+void adda_window_shape(int kind, const double inset[4]);
+/* Where a shape sits in a W x H window: x, y, width, height into `out`. A
+ * side with no distance gives a default size, measured from the side that
+ * has one, or centred when neither does. Shared by every platform. */
+void adda_shape_rect(const double inset[4], double W, double H, double out[4]);
 /* Length of a `[name]` starting at p (brackets included), or 0. It means the
  * same as {name}: the value of the variable called name. */
 uint32_t  adda_bracket_name(const char *p);
@@ -213,7 +224,7 @@ typedef enum {
     N_CALL,
     /* statements */
     N_BLOCK, N_ASSIGN, N_PRINT, N_IF, N_WHILE, N_FOREACH,
-    N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY, N_OPENAPP
+    N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY, N_OPENAPP, N_SHAPE
 } NodeKind;
 
 struct Node {

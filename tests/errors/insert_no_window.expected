@@ -1,0 +1,4 @@
+tests/errors/insert_no_window.adda:1: insert draws in the app window - put openApplication before it
+     1 | insert rounded box
+       | ^
+exit: 65

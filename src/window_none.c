@@ -6,3 +6,4 @@ bool adda_window_is_open(void) { return false; }
 void adda_window_print(const char *text, size_t len) { (void)text; (void)len; }
 void adda_window_wait_ms(double ms) { (void)ms; }
 void adda_window_run(void) {}
+void adda_window_shape(int kind, const double inset[4]) { (void)kind; (void)inset; }
