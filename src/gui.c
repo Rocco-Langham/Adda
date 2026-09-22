@@ -143,7 +143,7 @@ static HWND  hwndSettings, hwndCheats;
 static HWND  hwndCheatFind, hwndCheatList;
 
 static HBRUSH hBrushBg, hBrushSurface, hBrushAb;
-static HFONT  hFontMono, hFontMonoBold, hFontUI, hFontUIBold, hFontSmall;
+static HFONT  hFontMono, hFontCode, hFontCodeBold, hFontUI, hFontUIBold, hFontSmall;
 static HFONT  hFontTitle, hFontBody;      /* a cheat sheet entry's own page */
 static int    g_dpi = 96;
 
@@ -264,11 +264,11 @@ static BOOL system_is_dark(void)
     return light == 0;
 }
 
-/* The tidy view: on unless it was turned off. The long arrow is an em dash
- * where the code box can show one (the usual Windows code page), else => */
+/* The tidy view: on unless it was turned off. The long arrow is made of em
+ * dashes where the code box can show them (the usual Windows code page), else ==> */
 static BOOL g_tidy = TRUE;
 static BOOL g_tidying;                /* our own change to the text, not typing */
-static const char *tidy_arrow(void) { return GetACP() == 1252 ? "\x97>" : "=>"; }
+static const char *tidy_arrow(void) { return GetACP() == 1252 ? "\x97\x97>" : "==>"; }
 
 /* Settings, Editor: colour the code (on unless it was turned off) */
 static BOOL g_colours = TRUE;
@@ -420,7 +420,8 @@ static HFONT make_font(int points, int weight, const char *face)
 static void build_fonts(void)
 {
     if (hFontMono)   DeleteObject(hFontMono);
-    if (hFontMonoBold) DeleteObject(hFontMonoBold);
+    if (hFontCode)   DeleteObject(hFontCode);
+    if (hFontCodeBold) DeleteObject(hFontCodeBold);
     if (hFontUI)     DeleteObject(hFontUI);
     if (hFontUIBold) DeleteObject(hFontUIBold);
     if (hFontSmall)  DeleteObject(hFontSmall);
@@ -429,9 +430,11 @@ static void build_fonts(void)
 
     hFontTitle  = make_font(14, FW_SEMIBOLD, "Segoe UI");
     hFontBody   = make_font(10, FW_NORMAL,   "Segoe UI");
-    /* the code and the console: a little bigger than the rest, to read easily */
+    /* the console, a little bigger than the rest; the code bigger again, to
+     * read easily - and a bold of it for the tidy view's arrows */
     hFontMono   = make_font(13, FW_NORMAL,   "Consolas");
-    hFontMonoBold = make_font(13, FW_BOLD,   "Consolas");   /* the tidy view's arrows */
+    hFontCode   = make_font(15, FW_NORMAL,   "Consolas");
+    hFontCodeBold = make_font(15, FW_BOLD,   "Consolas");
     hFontUI     = make_font(9,  FW_NORMAL,   "Segoe UI");
     hFontUIBold = make_font(9,  FW_SEMIBOLD, "Segoe UI");
     hFontSmall  = make_font(8,  FW_NORMAL,   "Segoe UI");
@@ -712,7 +715,7 @@ static void fill_rect(HDC hdc, RECT r, COLORREF c)
 /* Rounded versions. GDI's RoundRect takes the full ellipse size, so the
  * corner radius is half of what gets passed. */
 #define RADIUS      S(8)
-#define GUTTER_W    S(44)       /* line-number strip in the code box */
+#define GUTTER_W    S(50)       /* line-number strip in the code box */
 #define RADIUS_BIG  S(12)
 
 static void round_fill(HDC hdc, RECT r, COLORREF c, int radius)
@@ -2225,7 +2228,7 @@ static void paint_colours(HWND h)
 
     GetClientRect(h, &rc);
     dc = GetDC(h);
-    oldFont = SelectObject(dc, hFontMono);
+    oldFont = SelectObject(dc, hFontCode);
     GetTextMetricsA(dc, &tm);
     lineH = tm.tmHeight ? tm.tmHeight : 1;
 
@@ -2244,7 +2247,7 @@ static void paint_colours(HWND h)
         int i, from = (int)sp[k].start, to = (int)(sp[k].start + sp[k].len);
         if (to <= first || from >= last) continue;
         if (!g_colours && sp[k].kind != COL_ARROW) continue;   /* colouring turned off */
-        SelectObject(dc, sp[k].kind == COL_ARROW ? hFontMonoBold : hFontMono);
+        SelectObject(dc, sp[k].kind == COL_ARROW ? hFontCodeBold : hFontCode);
         SetTextColor(dc, code_colour(sp[k].kind));
         for (i = from < first ? first : from; i < to && i < last; i++) {
             LRESULT pos;
@@ -2285,7 +2288,7 @@ static void paint_check(HWND h)
     GetWindowTextA(h, text, len + 1);
 
     dc = GetDC(h);
-    oldFont = SelectObject(dc, hFontMono);
+    oldFont = SelectObject(dc, hFontCode);
     GetTextMetricsA(dc, &tm);
     SetBkMode(dc, TRANSPARENT);
 
@@ -2367,7 +2370,7 @@ static void paint_gutter(HWND h)
     InflateRect(&g, 0, -S(6));
     fill_rect(dc, g, g_t.border);
 
-    oldFont = SelectObject(dc, hFontMono);
+    oldFont = SelectObject(dc, hFontCode);
     GetTextMetricsA(dc, &tm);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, g_t.muted);
@@ -3727,7 +3730,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             WS_CHILD | WS_VSCROLL | LBS_NOTIFY | LBS_HASSTRINGS,
             0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)ID_FILES, inst, NULL);
 
-        SendMessage(hwndCode,    WM_SETFONT, (WPARAM)hFontMono, TRUE);
+        SendMessage(hwndCode,    WM_SETFONT, (WPARAM)hFontCode, TRUE);
         SendMessage(hwndConsole, WM_SETFONT, (WPARAM)hFontMono, TRUE);
         SendMessage(hwndFind,    WM_SETFONT, (WPARAM)hFontUI, TRUE);
         SendMessage(hwndFiles,   WM_SETFONT, (WPARAM)hFontUI, TRUE);
@@ -4017,7 +4020,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         RECT *r = (RECT *)lParam;
         g_dpi = HIWORD(wParam);
         build_fonts();
-        SendMessage(hwndCode,    WM_SETFONT, (WPARAM)hFontMono, TRUE);
+        SendMessage(hwndCode,    WM_SETFONT, (WPARAM)hFontCode, TRUE);
         SendMessage(hwndConsole, WM_SETFONT, (WPARAM)hFontMono, TRUE);
         SendMessage(hwndFind,    WM_SETFONT, (WPARAM)hFontUI, TRUE);
         SendMessage(hwndFiles,   WM_SETFONT, (WPARAM)hFontUI, TRUE);
@@ -4080,7 +4083,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         DeleteObject(hBrushSurface);
         DeleteObject(hBrushAb);
         DeleteObject(hFontMono);
-        DeleteObject(hFontMonoBold);
+        DeleteObject(hFontCode);
+        DeleteObject(hFontCodeBold);
         DeleteObject(hFontUI);
         DeleteObject(hFontUIBold);
         DeleteObject(hFontSmall);

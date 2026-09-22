@@ -1,9 +1,9 @@
 /* The tidy view of named shape blocks, shared by both GUIs.
  *
- *   insert rounded box; name = [box1]        insert rounded box; name —> box1
- *   15px top,right,left                  ->  15px —> top, right, left
- *   Height = 15px                            Height —> 15px
- *   text [box1] Hello; font impact; size15   text [box1] -> Hello -> font impact -> size 15
+ *   insert rounded box; name = [box1]        insert rounded box; name ——> box1
+ *   15px top,right,left                  =>  15px ——> top, right, left
+ *   Height = 15px                            Height ——> 15px
+ *   text [box1] Hello; font impact; size15   text [box1] --> Hello --> font impact --> size 15
  *   end                                      end
  *
  * It is only ever a way of SHOWING the code: files are always saved raw, and

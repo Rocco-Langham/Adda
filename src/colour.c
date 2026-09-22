@@ -62,15 +62,20 @@ static bool is_number(const char *p, size_t n)
     return digits > 0;
 }
 
-/* a whole-line mark like the tidy view's arrows: -> and the long ones */
+/* An arrow like the tidy view's: any run of dashes - plain ones, = signs, or
+ * the long dash (in UTF-8, or the single byte Windows uses) - then a >.
+ * Returns how many bytes it takes, or 0. */
 static size_t arrow_at(const char *p, const char *e)
 {
-    if (e - p >= 2 && p[0] == '-' && p[1] == '>') return 2;
-    if (e - p >= 2 && p[0] == '=' && p[1] == '>') return 2;
-    if (e - p >= 4 && (unsigned char)p[0] == 0xE2 && (unsigned char)p[1] == 0x80 &&
-        (unsigned char)p[2] == 0x94 && p[3] == '>') return 4;               /* UTF-8 em dash */
-    if (e - p >= 2 && (unsigned char)p[0] == 0x97 && p[1] == '>') return 2;  /* Windows' */
-    return 0;
+    const char *q = p;
+    for (;;) {
+        if (q < e && (*q == '-' || *q == '=')) q++;
+        else if (e - q >= 3 && (unsigned char)q[0] == 0xE2 && (unsigned char)q[1] == 0x80 &&
+                 (unsigned char)q[2] == 0x94) q += 3;
+        else if (q < e && (unsigned char)*q == 0x97) q++;
+        else break;
+    }
+    return (q > p && q < e && *q == '>') ? (size_t)(q + 1 - p) : 0;
 }
 
 static void colour_line(Spans *s, const char *base, const char *p, const char *e)
