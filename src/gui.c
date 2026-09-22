@@ -2183,13 +2183,14 @@ static int char_x(HWND h, int i)
 }
 
 /* The colour for each kind of piece of code, in the theme's light or dark
- * set - the dark one after VS Code's, which Abyss is too. */
+ * set (Abyss uses the dark one). Variables are red. */
 static COLORREF code_colour(ColourKind k)
 {
-    static const unsigned DARK[COL_KINDS]  = { 0x569CD6, 0xC586C0, 0x9CDCFE, 0xB5CEA8,
-                                               0xCE9178, 0x6A9955, 0 };
-    static const unsigned LIGHT[COL_KINDS] = { 0x0000FF, 0xAF00DB, 0x001080, 0x098658,
-                                               0xA31515, 0x008000, 0 };
+    /* keyword, constant, variable (red), number, quoted text, comment */
+    static const unsigned DARK[COL_KINDS]  = { 0x569CD6, 0xC586C0, 0xF47067, 0xB5CEA8,
+                                               0xE5C07B, 0x6A9955, 0 };
+    static const unsigned LIGHT[COL_KINDS] = { 0x0000FF, 0xAF00DB, 0xD11A1A, 0x098658,
+                                               0x9A6700, 0x008000, 0 };
     unsigned c;
     if (k == COL_PUNCT) return g_t.muted;
     if (k == COL_ARROW) return g_t.text;              /* bold, so it stands out anyway */
