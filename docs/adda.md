@@ -578,7 +578,7 @@ whole run.
 
 The code box colours your code as you type: keywords like `print`, `if` and
 `end`, variables like `[name]`, numbers, `true`/`false`/`nothing`, quoted text
-and `# comments` each have their own colour, which follows the theme. A word is
+and `# comments` each have their own colour, which follows the theme (Settings, **Editor**, turns it off). A word is
 only coloured as a keyword where it really acts as one, so the `and` in
 `print Tom and Jo` stays plain text.
 
@@ -594,7 +594,7 @@ Down the left side:
 | New Project | Asks where to save a new project and what to call it, then makes that folder with `first.adda` and `style.adda` in it and opens it as the project. |
 | Tidy view | Shows each finished named shape in a cleaner form - `insert rounded box; name —> box1`, `15px —> top, right, left`, `text [box1] -> Hello -> font impact -> size 15`. It is only how the code is shown: your file is always saved as normal code. A block turns tidy as soon as you type its `end`; click on one of its lines to see it as raw code again. Click the button to turn tidy view off (it is lit while it is on). |
 | Cheat sheet | Everything in this guide, grouped into topics. Click a topic to open its page, then click anything in it to open a page of its own: what it does, and an example to read and type out yourself. Nothing is pasted into your program. **<- Back** returns, and typing in the search box on the topics page searches every topic. |
-| Settings | **Themes**: Follow Windows, Light, Dark, Beige, or Abyss. |
+| Settings | **Themes**: Follow Windows, Light, Dark, Beige, or Abyss. **Editor**: switch **Colour the code** off for code in one plain colour, or back on. Both are remembered. |
 
 Along the bottom of the Explorer, **Save** writes your code wherever you choose,
 and **Import** brings things in. Import a **folder** and it becomes the project:

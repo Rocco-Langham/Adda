@@ -361,6 +361,15 @@ static BOOL g_tidying;                 /* our own change to the text, not typing
 #define TIDY_ARROW "\xe2\x80\x94>"   /* —> */
 static void tidy_update(void);
 
+/* Settings, Editor: colour the code (on unless it was turned off) */
+static BOOL g_colours = YES;
+
+static void load_colours(void)
+{
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    g_colours = [d objectForKey:@"ColourCode"] ? [d boolForKey:@"ColourCode"] : YES;
+}
+
 static void load_tidy(void)
 {
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
@@ -442,6 +451,7 @@ static void colour_code(void)
     if (!lm || !text.length || g_checkLines.count) return;
     [lm removeTemporaryAttribute:NSForegroundColorAttributeName
                forCharacterRange:NSMakeRange(0, text.length)];
+    if (!g_colours) return;              /* turned off in Settings: all one colour */
 
     sp = malloc(sizeof *sp * (size_t)cap);
     if (!sp) return;
@@ -2127,9 +2137,34 @@ static void paint_main(void)
 
 static int g_setRowHot = -1;
 
+/* Settings has pages, picked from the list down its left side */
+enum { SET_THEMES, SET_EDITOR, SET_PAGES };
+static const char *const SET_PAGE_NAMES[SET_PAGES] = { "Themes", "Editor" };
+static int g_setPage = SET_THEMES;
+static int g_setNavHot = -1;
+
+/* the Editor page's switches: what each is called and says */
+enum { EDIT_COLOURS, EDIT_ROWS };
+static const char *const EDIT_NAMES[EDIT_ROWS] = { "Colour the code" };
+static const char *const EDIT_ABOUT[EDIT_ROWS] = {
+    "Keywords, variables, numbers and text each get their own colour"
+};
+static BOOL edit_on(int row) { return row == EDIT_COLOURS ? g_colours : NO; }
+
+static NSRect settings_nav_rect(int i) { return NSMakeRect(10, 16 + i * 34, SET_NAV_W - 20, 28); }
+
+/* an on/off switch, like the Mac's own: a pill with a knob at one end */
+static void draw_switch(NSRect r, BOOL on)
+{
+    CGFloat d = NSHeight(r) - 4;
+    round_fill(r, on ? g_t.accent : g_t.border, NSHeight(r) / 2);
+    [NSColor.whiteColor setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:
+        NSMakeRect(on ? NSMaxX(r) - 2 - d : NSMinX(r) + 2, NSMinY(r) + 2, d, d)] fill];
+}
+
 static void settings_paint(NSRect rc)
 {
-    NSRect item;
     CGFloat y;
     int i, j;
 
@@ -2137,17 +2172,38 @@ static void settings_paint(NSRect rc)
     fill_rect(NSMakeRect(0, 0, SET_NAV_W, NSHeight(rc)), g_t.bg);
     fill_rect(NSMakeRect(SET_NAV_W - 1, 0, 1, NSHeight(rc)), g_t.border);
 
-    item = NSMakeRect(10, 16, SET_NAV_W - 20, 28);
-    round_fill(item, g_t.sel, RADIUS);
-    text_at(NSMakeRect(NSMinX(item) + 10, NSMinY(item), NSWidth(item) - 10, NSHeight(item)),
-            @"Themes", g_fontUIBold, g_t.text, T_VCENTER);
+    for (i = 0; i < SET_PAGES; i++) {
+        NSRect item = settings_nav_rect(i);
+        if (i == g_setPage)          round_fill(item, g_t.sel, RADIUS);
+        else if (i == g_setNavHot)   round_fill(item, g_t.ghostHot, RADIUS);
+        text_at(NSMakeRect(NSMinX(item) + 10, NSMinY(item), NSWidth(item) - 10, NSHeight(item)),
+                @(SET_PAGE_NAMES[i]), i == g_setPage ? g_fontUIBold : g_fontUI, g_t.text, T_VCENTER);
+    }
 
-    /* the Themes page */
     y = 16;
     text_at(NSMakeRect(SET_NAV_W + 20, y, NSWidth(rc) - SET_NAV_W - 36, 24),
-            @"Themes", g_fontUIBold, g_t.text, T_VCENTER);
+            @(SET_PAGE_NAMES[g_setPage]), g_fontUIBold, g_t.text, T_VCENTER);
     y += 34;
 
+    if (g_setPage == SET_EDITOR) {
+        for (i = 0; i < EDIT_ROWS; i++) {
+            NSRect row = NSMakeRect(SET_NAV_W + 12, y, NSWidth(rc) - SET_NAV_W - 24, 52);
+            double k = press_amount(PRESS_ROW, i);
+            if (g_rowGlow[i] > 0.01 || k > 0)
+                round_fill(NSInsetRect(row, 4 * k, 2 * k),
+                           blend(blend(g_t.surface, g_t.ghostHot, k > 0 ? 1 : g_rowGlow[i]),
+                                 g_t.accent, 0.3 * k), RADIUS_BIG);
+            text_at(NSMakeRect(NSMinX(row) + 14, NSMinY(row) + 8, NSWidth(row) - 90, 18),
+                    @(EDIT_NAMES[i]), g_fontUIBold, g_t.text, T_LEFT);
+            text_at(NSMakeRect(NSMinX(row) + 14, NSMinY(row) + 27, NSWidth(row) - 90, 18),
+                    @(EDIT_ABOUT[i]), g_fontSmall, g_t.muted, T_LEFT);
+            draw_switch(NSMakeRect(NSMaxX(row) - 14 - 38, NSMidY(row) - 11, 38, 22), edit_on(i));
+            y = NSMaxY(row) + 4;
+        }
+        return;
+    }
+
+    /* the Themes page */
     for (i = 0; i < PICK_COUNT; i++) {
         Theme t = theme_for(i);
         NSRect row = NSMakeRect(SET_NAV_W + 12, y, NSWidth(rc) - SET_NAV_W - 24, 52);
@@ -2180,17 +2236,36 @@ static void settings_paint(NSRect rc)
     }
 }
 
+/* which row of the page showing is at p, or -1 */
 static int settings_row_at(NSPoint p)
 {
     CGFloat y = 16 + 34;
-    int i;
+    int i, rows = g_setPage == SET_EDITOR ? EDIT_ROWS : PICK_COUNT;
 
     if (p.x < SET_NAV_W) return -1;
-    for (i = 0; i < PICK_COUNT; i++) {
+    for (i = 0; i < rows; i++) {
         if (p.y >= y && p.y < y + 52) return i;
         y += 52 + 4;
     }
     return -1;
+}
+
+static int settings_nav_at(NSPoint p)
+{
+    int i;
+    for (i = 0; i < SET_PAGES; i++)
+        if (NSPointInRect(p, settings_nav_rect(i))) return i;
+    return -1;
+}
+
+/* a switch on the Editor page was clicked */
+static void edit_toggle(int row)
+{
+    if (row == EDIT_COLOURS) {
+        g_colours = !g_colours;
+        [NSUserDefaults.standardUserDefaults setBool:g_colours forKey:@"ColourCode"];
+        colour_code();
+    }
 }
 
 /* Settings and the cheat sheet float over the main window, as gui.c's owned
@@ -2883,26 +2958,41 @@ static void build_menu(void)
 
 - (void)mouseMoved:(NSEvent *)e
 {
-    int was = g_setRowHot;
-    g_setRowHot = settings_row_at([self convertPoint:e.locationInWindow fromView:nil]);
+    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
+    int was = g_setRowHot, nav = settings_nav_at(p);
+    g_setRowHot = settings_row_at(p);
     if (g_setRowHot != was) animate();
+    if (nav != g_setNavHot) { g_setNavHot = nav; self.needsDisplay = YES; }
 }
 
 - (void)mouseExited:(NSEvent *)e
 {
     (void)e;
     if (g_setRowHot != -1) { g_setRowHot = -1; animate(); }
+    if (g_setNavHot != -1) { g_setNavHot = -1; self.needsDisplay = YES; }
 }
 
 - (void)mouseDown:(NSEvent *)e
 {
-    int row = settings_row_at([self convertPoint:e.locationInWindow fromView:nil]);
-    if (row >= 0) {
-        press(PRESS_ROW, row);
-        g_pick = row;
-        save_pick();
-        apply_theme();
+    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
+    int nav = settings_nav_at(p), row = settings_row_at(p);
+
+    if (nav >= 0 && nav != g_setPage) {
+        g_setPage = nav;
+        g_setRowHot = -1;
+        self.needsDisplay = YES;
+        return;
     }
+    if (row < 0) return;
+    press(PRESS_ROW, row);
+    if (g_setPage == SET_EDITOR) {
+        edit_toggle(row);
+        self.needsDisplay = YES;
+        return;
+    }
+    g_pick = row;
+    save_pick();
+    apply_theme();
 }
 
 - (void)keyDown:(NSEvent *)e
@@ -3400,6 +3490,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     g_treeCache = [NSMutableDictionary dictionary];
     load_pick();
     load_tidy();
+    load_colours();
     build_fonts();
     g_t = theme_for(g_pick);
     build_menu();

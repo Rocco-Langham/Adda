@@ -270,6 +270,31 @@ static BOOL g_tidy = TRUE;
 static BOOL g_tidying;                /* our own change to the text, not typing */
 static const char *tidy_arrow(void) { return GetACP() == 1252 ? "\x97>" : "=>"; }
 
+/* Settings, Editor: colour the code (on unless it was turned off) */
+static BOOL g_colours = TRUE;
+
+static void load_colours(void)
+{
+    HKEY key;
+    DWORD v = 1, size = sizeof(v);
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Adda", 0, KEY_READ, &key) == ERROR_SUCCESS) {
+        RegQueryValueExA(key, "ColourCode", NULL, NULL, (BYTE *)&v, &size);
+        RegCloseKey(key);
+    }
+    g_colours = v != 0;
+}
+
+static void save_colours(void)
+{
+    HKEY key;
+    DWORD v = g_colours ? 1 : 0;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Adda", 0, NULL, 0,
+                        KEY_WRITE, NULL, &key, NULL) == ERROR_SUCCESS) {
+        RegSetValueExA(key, "ColourCode", 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+        RegCloseKey(key);
+    }
+}
+
 static void load_tidy(void)
 {
     HKEY key;
@@ -2182,6 +2207,7 @@ static void paint_colours(HWND h)
     char *text;
     ColourSpan *sp;
 
+    if (!g_colours) return;           /* turned off in Settings: all one colour */
     len = GetWindowTextLengthA(h);
     if (!len) return;
     text = malloc((size_t)len + 1);
@@ -2578,9 +2604,46 @@ static int g_setRowHot = -1;
 static double g_rowGlow[PICK_COUNT];
 static DWORD  g_rowTick;
 
+/* Settings has pages, picked from the list down its left side */
+enum { SET_THEMES, SET_EDITOR, SET_PAGES };
+static const char *const SET_PAGE_NAMES[SET_PAGES] = { "Themes", "Editor" };
+static int g_setPage = SET_THEMES;
+static int g_setNavHot = -1;
+
+/* the Editor page's switches: what each is called and says */
+enum { EDIT_COLOURS, EDIT_ROWS };
+static const char *const EDIT_NAMES[EDIT_ROWS] = { "Colour the code" };
+static const char *const EDIT_ABOUT[EDIT_ROWS] = {
+    "Keywords, variables, numbers and text each get their own colour"
+};
+static BOOL edit_on(int row) { return row == EDIT_COLOURS ? g_colours : FALSE; }
+
+static RECT settings_nav_rect(int i)
+{
+    RECT r;
+    r.left = S(10);
+    r.right = SET_NAV_W - S(10);
+    r.top = S(16) + i * S(34);
+    r.bottom = r.top + S(28);
+    return r;
+}
+
+/* an on/off switch: a pill with a knob at one end */
+static void draw_switch(HDC hdc, RECT r, BOOL on)
+{
+    int d = (r.bottom - r.top) - S(4);
+    RECT knob;
+    round_fill(hdc, r, on ? g_t.accent : g_t.border, (r.bottom - r.top) / 2);
+    knob.top = r.top + S(2);
+    knob.bottom = knob.top + d;
+    knob.left = on ? r.right - S(2) - d : r.left + S(2);
+    knob.right = knob.left + d;
+    round_fill(hdc, knob, RGB(255, 255, 255), d / 2);
+}
+
 static void settings_paint(HWND hwnd, HDC hdc)
 {
-    RECT rc, nav, item;
+    RECT rc, nav;
     int i, y;
 
     GetClientRect(hwnd, &rc);
@@ -2595,20 +2658,16 @@ static void settings_paint(HWND hwnd, HDC hdc)
         fill_rect(hdc, edge, g_t.border);
     }
 
-    item = nav;
-    item.left  += S(10);
-    item.top   += S(16);
-    item.right -= S(10);
-    item.bottom = item.top + S(28);
-    round_fill(hdc, item, g_t.sel, RADIUS);
-    {
-        RECT label = item;
+    for (i = 0; i < SET_PAGES; i++) {
+        RECT item = settings_nav_rect(i), label;
+        if (i == g_setPage)         round_fill(hdc, item, g_t.sel, RADIUS);
+        else if (i == g_setNavHot)  round_fill(hdc, item, g_t.ghostHot, RADIUS);
+        label = item;
         label.left += S(10);
-        text_at(hdc, label, "Themes", hFontUIBold, g_t.text,
+        text_at(hdc, label, SET_PAGE_NAMES[i], i == g_setPage ? hFontUIBold : hFontUI, g_t.text,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
 
-    /* the Themes page */
     y = S(16);
     {
         RECT head;
@@ -2616,11 +2675,47 @@ static void settings_paint(HWND hwnd, HDC hdc)
         head.right = rc.right - S(16);
         head.top = y;
         head.bottom = y + S(24);
-        text_at(hdc, head, "Themes", hFontUIBold, g_t.text,
+        text_at(hdc, head, SET_PAGE_NAMES[g_setPage], hFontUIBold, g_t.text,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         y += S(34);
     }
 
+    if (g_setPage == SET_EDITOR) {
+        for (i = 0; i < EDIT_ROWS; i++) {
+            RECT row, label, sw;
+            double k = (i == g_rowPress) ? press_amount(g_rowPressAt) : 0;
+
+            row.left = SET_NAV_W + S(12);
+            row.right = rc.right - S(12);
+            row.top = y;
+            row.bottom = y + S(52);
+            if (k > 0 || g_rowGlow[i] > 0.01) {
+                RECT pill = row;
+                InflateRect(&pill, -(int)(S(4) * k), -(int)(S(2) * k));
+                round_fill(hdc, pill, blend(blend(g_t.surface, g_t.ghostHot, k > 0 ? 1 : g_rowGlow[i]),
+                                            g_t.accent, 0.3 * k), RADIUS_BIG);
+            }
+            label = row;
+            label.left += S(14);
+            label.right -= S(70);
+            label.top += S(8);
+            label.bottom = label.top + S(18);
+            text_at(hdc, label, EDIT_NAMES[i], hFontUIBold, g_t.text, DT_LEFT | DT_SINGLELINE);
+            label.top = row.top + S(27);
+            label.bottom = label.top + S(18);
+            text_at(hdc, label, EDIT_ABOUT[i], hFontSmall, g_t.muted,
+                    DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+            sw.right = row.right - S(14);
+            sw.left = sw.right - S(38);
+            sw.top = (row.top + row.bottom) / 2 - S(11);
+            sw.bottom = sw.top + S(22);
+            draw_switch(hdc, sw, edit_on(i));
+            y = row.bottom + S(4);
+        }
+        return;
+    }
+
+    /* the Themes page */
     for (i = 0; i < PICK_COUNT; i++) {
         Theme t = theme_for(i);
         RECT row, sw, label, about;
@@ -2683,18 +2778,25 @@ static void settings_paint(HWND hwnd, HDC hdc)
     }
 }
 
+/* which row of the page showing is at p, or -1 */
 static int settings_row_at(HWND hwnd, POINT p)
 {
-    RECT rc;
-    int i, y = S(16) + S(34);
+    int i, y = S(16) + S(34), rows = g_setPage == SET_EDITOR ? EDIT_ROWS : PICK_COUNT;
 
-    GetClientRect(hwnd, &rc);
+    (void)hwnd;
     if (p.x < SET_NAV_W) return -1;
-
-    for (i = 0; i < PICK_COUNT; i++) {
+    for (i = 0; i < rows; i++) {
         if (p.y >= y && p.y < y + S(52)) return i;
         y += S(52) + S(4);
     }
+    return -1;
+}
+
+static int settings_nav_at(POINT p)
+{
+    int i;
+    for (i = 0; i < SET_PAGES; i++)
+        if (contains(settings_nav_rect(i), p)) return i;
     return -1;
 }
 
@@ -2724,6 +2826,10 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
             g_rowTick = GetTickCount();
             SetTimer(hwnd, ID_ANIM, 15, NULL);
         }
+        {
+            int nav = settings_nav_at(p);
+            if (nav != g_setNavHot) { g_setNavHot = nav; InvalidateRect(hwnd, NULL, FALSE); }
+        }
 
         tme.cbSize = sizeof(tme);
         tme.dwFlags = TME_LEAVE;
@@ -2739,18 +2845,37 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
             g_rowTick = GetTickCount();
             SetTimer(hwnd, ID_ANIM, 15, NULL);
         }
+        if (g_setNavHot != -1) { g_setNavHot = -1; InvalidateRect(hwnd, NULL, FALSE); }
         return 0;
 
     case WM_LBUTTONDOWN: {
         POINT p;
         int row;
         p.x = GET_X_LPARAM(l); p.y = GET_Y_LPARAM(l);
+        {
+            int nav = settings_nav_at(p);
+            if (nav >= 0 && nav != g_setPage) {
+                g_setPage = nav;
+                g_setRowHot = -1;
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+        }
         row = settings_row_at(hwnd, p);
         if (row >= 0) {
             g_rowPress = row;
             g_rowPressAt = GetTickCount();
             g_rowTick = GetTickCount();
             SetTimer(hwnd, ID_ANIM, 15, NULL);
+            if (g_setPage == SET_EDITOR) {
+                if (row == EDIT_COLOURS) {
+                    g_colours = !g_colours;
+                    save_colours();
+                    InvalidateRect(hwndCode, NULL, TRUE);   /* repainted with or without */
+                }
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
             g_pick = row;
             save_pick();
             apply_theme(hwndMain);
@@ -3566,6 +3691,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         g_curNS = LoadCursorA(NULL, IDC_SIZENS);
         load_pick();
         load_tidy();
+        load_colours();
         g_t = theme_for(g_pick);
         hBrushBg      = CreateSolidBrush(g_t.bg);
         hBrushSurface = CreateSolidBrush(g_t.surface);
