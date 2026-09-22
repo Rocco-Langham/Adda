@@ -1,0 +1,4 @@
+tests/errors/shape_text_location.adda:4: 'ish' is not a place - use left, centre, right, top, bottom, or two together like top left
+     4 | Text [b] Hello; location middle-ish
+       |                                 ^
+exit: 65

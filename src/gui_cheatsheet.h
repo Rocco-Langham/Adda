@@ -391,6 +391,21 @@ static const Cheat CHEAT_SHAPES[] = {
   "After an openApplication line, this draws a box 15px in from the top, left and right edges, and height = 25px makes it exactly 25px tall. The result is a thin strip across the top of your app window. A line like width = 300px sets how wide a shape is in the same way.",
   "insert box\r\n15px top,left,right\r\nheight = 25px", 0 },
 
+{ "Name a shape and write in it",
+  "A name after ; makes a block that ends with End; text lines write in it. label, caption, words, font, writing",
+  "The first line draws a rounded box called [roundedbox1] - the name is just its label. The next two place it and set its height. The Text line writes Hello in the middle of it, in Helvetica at size 15. A named shape always needs End.",
+  "insert rounded box; name = [roundedbox1]\r\n15px top, right, left\r\nHeight = 15px\r\nText [roundedbox1] Hello; font helvetica; size15; location centre\r\nEnd", 0 },
+
+{ "Put text in a corner of a shape",
+  "location says where: left, centre, right, top, bottom, or two together. place, position, align, corner",
+  "Draws a named box 40px in from every edge, then writes two lines in it: Welcome in its top left corner, and Page 1 in small writing in its bottom right corner.",
+  "insert box; name = [panel]\r\n40px top, bottom, left, right\r\ntext [panel] Welcome; location top left\r\ntext [panel] Page 1; size 11; location bottom right\r\nend", 0 },
+
+{ "Write in a shape later on",
+  "A text line on its own writes in a shape drawn earlier. change, update, add words, later",
+  "Draws a circle called [dot] and ends its block straight away. Later, the text line writes Score: followed by the value of [score] inside it, in Courier New at size 18.",
+  "insert circle; name = [dot]\r\nend\r\n[score] = 10\r\ntext [dot] Score: [score]; font courier new; size 18", 0 },
+
 { "Circle",
   "The biggest circle that fits its space; 100px across on its own. round, dot, ball",
   "Draws a circle in your app window. No distance lines are given, so it is 100px across and sits right in the centre of the window. It only works after an openApplication line.",

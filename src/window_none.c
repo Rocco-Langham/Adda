@@ -6,4 +6,13 @@ bool adda_window_is_open(void) { return false; }
 void adda_window_print(const char *text, size_t len) { (void)text; (void)len; }
 void adda_window_wait_ms(double ms) { (void)ms; }
 void adda_window_run(void) {}
-void adda_window_shape(int kind, const double spec[SHAPE_SPEC]) { (void)kind; (void)spec; }
+void adda_window_shape(int kind, const double spec[SHAPE_SPEC], const char *name)
+{
+    (void)kind; (void)spec; (void)name;
+}
+bool adda_window_shape_text(const char *name, const char *text, const char *font,
+                            double size, int location)
+{
+    (void)name; (void)text; (void)font; (void)size; (void)location;
+    return false;
+}

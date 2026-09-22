@@ -651,7 +651,20 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             if (!adda_window_is_open())
                 adda_error(n->line, "insert draws in the app window - put openApplication before it");
             for (k = 0; k < SHAPE_SPEC; k++) spec[k] = n->kids[k]->number;
-            adda_window_shape(n->op, spec);
+            adda_window_shape(n->op, spec, n->name ? n->name->bytes : NULL);
+            return FLOW_NORMAL;
+        }
+
+        case N_SHAPETEXT: {
+            Text *words;
+            if (!adda_window_is_open())
+                adda_error(n->line, "text draws in the app window - put openApplication before it");
+            words = value_to_text(eval(n->a, sc));
+            if (!adda_window_shape_text(n->name->bytes, words->bytes,
+                                        n->nparams ? n->params[0]->bytes : NULL,
+                                        n->number, n->op))
+                adda_error(n->line, "there is no shape called [%s] - name one with: "
+                           "insert box; name = [%s]", n->name->bytes, n->name->bytes);
             return FLOW_NORMAL;
         }
 

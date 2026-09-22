@@ -1,0 +1,4 @@
+tests/errors/shape_text_setting.adda:4: 'colour' is not a text setting - use font, size or location
+     4 | text [b] Hi; colour red
+       |              ^
+exit: 65

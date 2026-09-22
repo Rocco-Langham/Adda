@@ -11,9 +11,20 @@
 #include <stdlib.h>
 #include "adda.h"
 
+/* one shape: what it is, where it goes, its name if it has one, and the
+ * text written in it */
+@interface AddaShape : NSObject
+@property int kind;
+@property (strong) NSArray<NSNumber *> *spec;          /* SHAPE_SPEC numbers */
+@property (copy) NSString *name;
+@property (strong) NSMutableArray<NSDictionary *> *texts;   /* text, font, location */
+@end
+@implementation AddaShape
+@end
+
 @interface AddaCanvas : NSView
 @property (strong) NSMutableArray<NSString *> *lines;
-@property (strong) NSMutableArray<NSArray<NSNumber *> *> *shapes;   /* kind, 4 insets */
+@property (strong) NSMutableArray<AddaShape *> *shapes;
 @end
 
 @interface AddaWatcher : NSObject <NSWindowDelegate>
@@ -23,6 +34,56 @@ static NSWindow   *g_window;
 static AddaCanvas *g_canvas;
 static AddaWatcher *g_watcher;
 static bool        g_closed;
+
+/* A font by name, in any capitals - "helvetica" finds Helvetica - or the
+ * usual one when there is no such font. */
+static NSFont *font_named(NSString *name, CGFloat size)
+{
+    NSFontManager *fm = NSFontManager.sharedFontManager;
+    NSFont *f;
+
+    if (!name.length) return [NSFont systemFontOfSize:size];
+    f = [NSFont fontWithName:name size:size];
+    if (f) return f;
+    for (NSString *family in fm.availableFontFamilies)
+        if ([family caseInsensitiveCompare:name] == NSOrderedSame)
+            return [fm fontWithFamily:family traits:0 weight:5 size:size];
+    for (NSString *ps in fm.availableFonts)
+        if ([ps caseInsensitiveCompare:name] == NSOrderedSame)
+            return [NSFont fontWithName:ps size:size];
+    return [NSFont systemFontOfSize:size];
+}
+
+/* Each piece of a shape's text, placed inside it - left, centre or right,
+ * top, middle or bottom - with a little room to the edge. Text too tall for
+ * its shape is not cut off: it sits across the shape's middle instead. */
+static void draw_texts(AddaShape *sh, NSRect box)
+{
+    NSRect in = NSInsetRect(box, box.size.width > 28 ? 10 : 0, box.size.height > 20 ? 6 : 0);
+
+    if (!sh.texts.count || NSWidth(in) <= 0) return;
+    for (NSDictionary *t in sh.texts) {
+        int loc = [t[@"location"] intValue], h = loc % 3, v = loc / 3;
+        NSMutableParagraphStyle *para = [NSMutableParagraphStyle new];
+        NSDictionary *attrs;
+        CGFloat th, y;
+
+        para.alignment = h == TEXT_LEFT ? NSTextAlignmentLeft
+                       : h == TEXT_RIGHT ? NSTextAlignmentRight : NSTextAlignmentCenter;
+        para.lineBreakMode = NSLineBreakByWordWrapping;
+        attrs = @{ NSFontAttributeName: t[@"font"],
+                   NSForegroundColorAttributeName: NSColor.labelColor,
+                   NSParagraphStyleAttributeName: para };
+        th = ceil(NSHeight([t[@"text"] boundingRectWithSize:NSMakeSize(NSWidth(in), CGFLOAT_MAX)
+                                                   options:NSStringDrawingUsesLineFragmentOrigin
+                                                attributes:attrs]));
+        y = th > NSHeight(in) ? NSMidY(box) - th / 2          /* too tall: centred */
+          : v == TEXT_TOP ? NSMinY(in) : v == TEXT_BOTTOM ? NSMaxY(in) - th
+                                                           : NSMidY(in) - th / 2;
+        [t[@"text"] drawWithRect:NSMakeRect(NSMinX(in), y, NSWidth(in), th)
+                         options:NSStringDrawingUsesLineFragmentOrigin attributes:attrs];
+    }
+}
 
 @implementation AddaCanvas
 
@@ -41,12 +102,12 @@ static bool        g_closed;
     NSRectFill(self.bounds);
 
     /* shapes first, so the text sits on top of them */
-    for (NSArray<NSNumber *> *sh in self.shapes) {
+    for (AddaShape *sh in self.shapes) {
         double in[SHAPE_SPEC], r[4], xy[20];
-        int k, kind = sh[0].intValue, corners;
+        int k, kind = sh.kind, corners;
         NSRect box;
         NSBezierPath *path;
-        for (k = 0; k < SHAPE_SPEC; k++) in[k] = sh[(NSUInteger)k + 1].doubleValue;
+        for (k = 0; k < SHAPE_SPEC; k++) in[k] = sh.spec[(NSUInteger)k].doubleValue;
         adda_shape_rect(kind, in, NSWidth(self.bounds), NSHeight(self.bounds), r);
         box = NSMakeRect(r[0], r[1], r[2], r[3]);
 
@@ -65,6 +126,7 @@ static bool        g_closed;
             path.lineCapStyle = NSLineCapStyleRound;
             [[NSColor.labelColor colorWithAlphaComponent:0.55] setStroke];
             [path stroke];
+            draw_texts(sh, box);
             continue;
         } else if (kind == SHAPE_CIRCLE || kind == SHAPE_OVAL) {
             if (kind == SHAPE_CIRCLE) {             /* the biggest circle that fits */
@@ -84,6 +146,7 @@ static bool        g_closed;
         [[NSColor.labelColor colorWithAlphaComponent:0.30] setStroke];
         path.lineWidth = 1;
         [path stroke];
+        draw_texts(sh, box);
     }
     if (!all.length) return;
 
@@ -177,15 +240,41 @@ void adda_window_print(const char *text, size_t len)
     pump([NSDate date]);
 }
 
-void adda_window_shape(int kind, const double spec[SHAPE_SPEC])
+void adda_window_shape(int kind, const double spec[SHAPE_SPEC], const char *name)
 {
-    NSMutableArray<NSNumber *> *sh = [NSMutableArray arrayWithObject:@(kind)];
+    AddaShape *sh = [AddaShape new];
+    NSMutableArray<NSNumber *> *nums = [NSMutableArray array];
     int k;
-    for (k = 0; k < SHAPE_SPEC; k++) [sh addObject:@(spec[k])];
+    for (k = 0; k < SHAPE_SPEC; k++) [nums addObject:@(spec[k])];
+    sh.kind = kind;
+    sh.spec = nums;
+    sh.name = name ? @(name) : nil;
+    sh.texts = [NSMutableArray array];
     [g_canvas.shapes addObject:sh];
     g_canvas.needsDisplay = YES;
     [g_canvas displayIfNeeded];
     pump([NSDate date]);
+}
+
+bool adda_window_shape_text(const char *name, const char *text, const char *font,
+                            double size, int location)
+{
+    AddaShape *found = nil;
+    NSString *want = @(name), *words;
+
+    /* the latest shape with that name, if it was used twice */
+    for (AddaShape *sh in g_canvas.shapes)
+        if (sh.name && [sh.name caseInsensitiveCompare:want] == NSOrderedSame) found = sh;
+    if (!found) return false;
+
+    words = [[NSString alloc] initWithUTF8String:text];
+    [found.texts addObject:@{ @"text": words ? words : @"",
+                              @"font": font_named(font ? @(font) : nil, (CGFloat)size),
+                              @"location": @(location) }];
+    g_canvas.needsDisplay = YES;
+    [g_canvas displayIfNeeded];
+    pump([NSDate date]);
+    return true;
 }
 
 void adda_window_wait_ms(double ms)

@@ -14,9 +14,59 @@ static char *g_text;            /* every printed line, joined with \r\n */
 static size_t g_len;
 static HFONT g_font;
 
-typedef struct { int kind; double inset[SHAPE_SPEC]; } Shape;
+typedef struct { int kind; double inset[SHAPE_SPEC]; char name[64]; } Shape;
 static Shape *g_shapes;
 static int    g_shapeCount;
+
+/* text written in a shape: which shape, the words, and how */
+typedef struct { int shape; char *text; char font[64]; double size; int location; } ShapeText;
+static ShapeText *g_texts;
+static int        g_textCount;
+
+/* Each piece of a shape's text, placed inside it - left, centre or right,
+ * top, middle or bottom - with a little room to the edge. Text too tall for
+ * its shape is not cut off: it sits across the shape's middle instead. */
+static void draw_texts(HDC dc, int shape, int x, int y, int w, int ht)
+{
+    int i, padX = w > 28 ? 10 : 0, padY = ht > 20 ? 6 : 0;
+    int dpi = GetDeviceCaps(dc, LOGPIXELSY);
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+    for (i = 0; i < g_textCount; i++) {
+        const ShapeText *t = &g_texts[i];
+        int h = t->location % 3, v = t->location / 3, th;
+        UINT flags = DT_WORDBREAK | DT_NOPREFIX |
+                     (h == TEXT_LEFT ? DT_LEFT : h == TEXT_RIGHT ? DT_RIGHT : DT_CENTER);
+        RECT box, m;
+        HFONT f;
+        HGDIOBJ old;
+
+        if (t->shape != shape) continue;
+        /* an unknown font falls back to a similar one; none given is the usual */
+        f = CreateFontA(-(int)(t->size * dpi / 72.0 + 0.5), 0, 0, 0, FW_NORMAL,
+                        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                        t->font[0] ? t->font : "Segoe UI");
+        old = SelectObject(dc, f);
+
+        box.left = x + padX;
+        box.right = x + w - padX;
+        box.top = y + padY;
+        box.bottom = y + ht - padY;
+        m = box;
+        DrawTextA(dc, t->text, -1, &m, flags | DT_CALCRECT);
+        th = m.bottom - m.top;
+        if (th > box.bottom - box.top)   box.top = y + (ht - th) / 2;     /* too tall: centred */
+        else if (v == TEXT_BOTTOM)       box.top = box.bottom - th;
+        else if (v == TEXT_MIDDLE)       box.top = box.top + ((box.bottom - box.top) - th) / 2;
+        box.bottom = box.top + th;
+        DrawTextA(dc, t->text, -1, &box, flags);
+
+        SelectObject(dc, old);
+        DeleteObject(f);
+    }
+}
 
 static COLORREF mix(COLORREF a, COLORREF b, int pctB)
 {
@@ -67,8 +117,10 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
                     DeleteObject(thick);
                 } else if (kind == SHAPE_CIRCLE) {  /* the biggest circle that fits */
                     int d = w < ht ? w : ht;
-                    Ellipse(dc, x + (w - d) / 2, y + (ht - d) / 2,
-                            x + (w - d) / 2 + d, y + (ht - d) / 2 + d);
+                    x += (w - d) / 2;
+                    y += (ht - d) / 2;
+                    w = ht = d;
+                    Ellipse(dc, x, y, x + d, y + d);
                 } else if (kind == SHAPE_OVAL) {
                     Ellipse(dc, x, y, x + w, y + ht);
                 } else {
@@ -76,6 +128,7 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
                           : kind == SHAPE_PILL ? (w < ht ? w : ht) : 0;
                     RoundRect(dc, x, y, x + w, y + ht, round, round);
                 }
+                draw_texts(dc, i, x, y, w, ht);
             }
             SelectObject(dc, ob); SelectObject(dc, op);
             DeleteObject(fill); DeleteObject(edge);
@@ -166,17 +219,47 @@ void adda_window_print(const char *text, size_t len)
     pump();
 }
 
-void adda_window_shape(int kind, const double inset[SHAPE_SPEC])
+void adda_window_shape(int kind, const double inset[SHAPE_SPEC], const char *name)
 {
     Shape *grown = realloc(g_shapes, sizeof *g_shapes * (size_t)(g_shapeCount + 1));
     if (!grown) return;
     g_shapes = grown;
     g_shapes[g_shapeCount].kind = kind;
     memcpy(g_shapes[g_shapeCount].inset, inset, sizeof g_shapes[0].inset);
+    snprintf(g_shapes[g_shapeCount].name, sizeof g_shapes[0].name, "%s", name ? name : "");
     g_shapeCount++;
     InvalidateRect(g_window, NULL, FALSE);
     UpdateWindow(g_window);
     pump();
+}
+
+bool adda_window_shape_text(const char *name, const char *text, const char *font,
+                            double size, int location)
+{
+    ShapeText *grown;
+    int i, found = -1;
+    size_t len = strlen(text);
+
+    /* the latest shape with that name, if it was used twice */
+    for (i = 0; i < g_shapeCount; i++)
+        if (g_shapes[i].name[0] && lstrcmpiA(g_shapes[i].name, name) == 0) found = i;
+    if (found < 0) return false;
+
+    grown = realloc(g_texts, sizeof *g_texts * (size_t)(g_textCount + 1));
+    if (!grown) return true;
+    g_texts = grown;
+    g_texts[g_textCount].shape = found;
+    g_texts[g_textCount].text = malloc(len + 1);
+    if (!g_texts[g_textCount].text) return true;
+    memcpy(g_texts[g_textCount].text, text, len + 1);
+    snprintf(g_texts[g_textCount].font, sizeof g_texts[0].font, "%s", font ? font : "");
+    g_texts[g_textCount].size = size;
+    g_texts[g_textCount].location = location;
+    g_textCount++;
+    InvalidateRect(g_window, NULL, FALSE);
+    UpdateWindow(g_window);
+    pump();
+    return true;
 }
 
 void adda_window_wait_ms(double ms)

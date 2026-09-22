@@ -1,0 +1,4 @@
+tests/errors/shape_name_brackets.adda:1: put the shape's name in square brackets, as in: name = [box1]
+     1 | insert box; name = b
+       |                    ^
+exit: 65

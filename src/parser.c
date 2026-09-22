@@ -789,21 +789,166 @@ static bool px_word(const Token *t, double *out)
     return true;
 }
 
+/* case-insensitive: Height, Text and End are as good as height, text, end */
+static bool same_ci(const char *a, size_t alen, const char *b)
+{
+    size_t i;
+    if (strlen(b) != alen) return false;
+    for (i = 0; i < alen; i++)
+        if (tolower((unsigned char)a[i]) != tolower((unsigned char)b[i])) return false;
+    return true;
+}
+
+static bool word_ci(P *p, uint32_t i, const char *w)
+{
+    return i < p->n && p->t[i].kind == TK_WORD && same_ci(p->t[i].start, p->t[i].len, w);
+}
+
+static const char *skip_spaces(const char *q, const char *e)
+{
+    while (q < e && (*q == ' ' || *q == '\t')) q++;
+    return q;
+}
+
+static const char *trim_end(const char *s, const char *e)
+{
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+    return e;
+}
+
+/*   text [box1] Hello [name]; font helvetica; size 15; location top left
+ * Words to write inside a named shape, then - each after a semicolon, in any
+ * order, all optional - the font, its size and where in the shape it goes. */
+static Node *parse_shape_text(P *p)
+{
+    uint32_t s = p->i, e = line_end(p, s);
+    uint32_t line = p->t[s].line;
+    Node *n = node(N_SHAPETEXT, line);
+    const char *q, *end, *seg, *stop;
+    uint32_t nlen;
+
+    if (e <= s + 1)
+        adda_error_at(p->t[s].start, line, "say which shape, and what it says, as in: text [box1] Hello");
+    q = p->t[s + 1].start;
+    end = token_end(&p->t[e - 1]);
+
+    nlen = adda_bracket_name(q);
+    if (!nlen)
+        adda_error_at(q, line, "say which shape, in square brackets, as in: text [box1] Hello");
+    n->name = intern(q + 1, nlen - 2);
+    q += nlen;
+
+    /* the words: up to the first semicolon */
+    seg = skip_spaces(q, end);
+    for (stop = seg; stop < end && *stop != ';'; stop++) {}
+    if (trim_end(seg, stop) == seg)
+        adda_error_at(p->t[s + 1].start, line, "what should it say? As in: text [%.*s] Hello",
+                      (int)(nlen - 2), p->t[s + 1].start + 1);
+    n->a = build_template(p, seg, trim_end(seg, stop), false, line);
+
+    n->number = 15;                              /* the defaults */
+    n->op = TEXT_MIDDLE * 3 + TEXT_CENTRE;
+
+    /* then the settings */
+    while (stop < end) {
+        const char *key, *keyEnd, *val, *valEnd;
+        seg = skip_spaces(stop + 1, end);
+        for (stop = seg; stop < end && *stop != ';'; stop++) {}
+        valEnd = trim_end(seg, stop);
+        if (valEnd == seg) continue;             /* a stray ; */
+
+        key = seg;
+        for (keyEnd = key; keyEnd < valEnd && isalpha((unsigned char)*keyEnd); keyEnd++) {}
+        val = skip_spaces(keyEnd, valEnd);
+        if (val < valEnd && *val == '=') val = skip_spaces(val + 1, valEnd);
+
+        if (same_ci(key, (size_t)(keyEnd - key), "font")) {
+            if (val == valEnd)
+                adda_error_at(seg, line, "which font? As in: font helvetica");
+            n->params = adda_alloc(sizeof(Text *));
+            n->params[0] = text_new(val, (uint32_t)(valEnd - val));
+            n->nparams = 1;
+        } else if (same_ci(key, (size_t)(keyEnd - key), "size")) {
+            char buf[32];
+            size_t len = (size_t)(valEnd - val);
+            if (len >= 2 && same_ci(valEnd - 2, 2, "px")) len -= 2;
+            if (len == 0 || len >= sizeof buf)
+                adda_error_at(seg, line, "write the size as a number, as in: size 15");
+            memcpy(buf, val, len);
+            buf[len] = '\0';
+            {
+                char *after;
+                double v = strtod(buf, &after);
+                if (*after || v <= 0 || v > 400)
+                    adda_error_at(seg, line, "write the size as a number, as in: size 15");
+                n->number = v;
+            }
+        } else if (same_ci(key, (size_t)(keyEnd - key), "location")) {
+            int h = TEXT_CENTRE, v = TEXT_MIDDLE;
+            const char *w = val;
+            if (val == valEnd)
+                adda_error_at(seg, line, "where? As in: location top left");
+            while (w < valEnd) {
+                const char *we = w;
+                while (we < valEnd && isalpha((unsigned char)*we)) we++;
+                if (we == w) { w++; continue; }  /* a space or a dash between words */
+                if (same_ci(w, (size_t)(we - w), "top")) v = TEXT_TOP;
+                else if (same_ci(w, (size_t)(we - w), "bottom")) v = TEXT_BOTTOM;
+                else if (same_ci(w, (size_t)(we - w), "left")) h = TEXT_LEFT;
+                else if (same_ci(w, (size_t)(we - w), "right")) h = TEXT_RIGHT;
+                else if (same_ci(w, (size_t)(we - w), "centre") || same_ci(w, (size_t)(we - w), "center") ||
+                         same_ci(w, (size_t)(we - w), "middle")) {}
+                else if (same_ci(w, (size_t)(we - w), "topleft")) { v = TEXT_TOP; h = TEXT_LEFT; }
+                else if (same_ci(w, (size_t)(we - w), "topright")) { v = TEXT_TOP; h = TEXT_RIGHT; }
+                else if (same_ci(w, (size_t)(we - w), "bottomleft")) { v = TEXT_BOTTOM; h = TEXT_LEFT; }
+                else if (same_ci(w, (size_t)(we - w), "bottomright")) { v = TEXT_BOTTOM; h = TEXT_RIGHT; }
+                else
+                    adda_error_at(w, line, "'%.*s' is not a place - use left, centre, right, top, bottom, "
+                                  "or two together like top left", (int)(we - w), w);
+                w = we;
+            }
+            n->op = v * 3 + h;
+        } else {
+            adda_error_at(seg, line, "'%.*s' is not a text setting - use font, size or location",
+                          (int)(keyEnd > key ? keyEnd - key : valEnd - key), key);
+        }
+    }
+
+    end_line(p, e);
+    return n;
+}
+
 static Node *parse_insert(P *p)
 {
     uint32_t s = p->i, e = line_end(p, s);
     uint32_t line = p->t[s].line;
     Node *n = node(N_SHAPE, line);
+    Node *blk = NULL;                   /* a named shape: the shape, then its text */
     int k;
 
-    /* the shape's name is the rest of the line, e.g. "rounded box" */
+    /* the shape's kind is the rest of the line, e.g. "rounded box" - up to a
+     * semicolon, after which it may be given a name: ; name = [box1] */
     n->op = -1;
     if (e > s + 1) {
-        const char *from = p->t[s + 1].start;
-        size_t len = (size_t)(token_end(&p->t[e - 1]) - from);
+        const char *from = p->t[s + 1].start, *all = token_end(&p->t[e - 1]), *semi;
+        size_t len;
+        for (semi = from; semi < all && *semi != ';'; semi++) {}
+        len = (size_t)(trim_end(from, semi) - from);
         for (k = 0; k < SHAPE_COUNT; k++)
-            if (strlen(ADDA_SHAPE_NAMES[k]) == len && memcmp(ADDA_SHAPE_NAMES[k], from, len) == 0)
-                n->op = k;
+            if (same_ci(from, len, ADDA_SHAPE_NAMES[k])) n->op = k;
+        if (n->op >= 0 && semi < all) {
+            const char *q = skip_spaces(semi + 1, all), *w = q;
+            uint32_t nlen;
+            while (w < all && isalpha((unsigned char)*w)) w++;
+            if (!same_ci(q, (size_t)(w - q), "name"))
+                adda_error_at(q, line, "after the ; comes the shape's name, as in: insert box; name = [box1]");
+            q = skip_spaces(w, all);
+            if (q < all && *q == '=') q = skip_spaces(q + 1, all);
+            nlen = adda_bracket_name(q);
+            if (!nlen || trim_end(q, all) != q + nlen)
+                adda_error_at(q, line, "put the shape's name in square brackets, as in: name = [box1]");
+            n->name = intern(q + 1, nlen - 2);
+        }
     }
     if (n->op < 0)
         adda_error_at(p->t[s].start, line,
@@ -816,13 +961,29 @@ static Node *parse_insert(P *p)
     }
     end_line(p, e);
 
+    /* A named shape is a block that ends with End, and can hold text lines.
+     * One without a name ends at the first line that is not about it, as it
+     * always has - so an `end` meant for an `if` around it is never taken. */
+    if (n->name) {
+        blk = node(N_BLOCK, line);
+        add_kid(blk, n);
+    }
+
     /* the lines straight after it: distances like 3px top,left, and a size
      * like height = 25px */
     for (;;) {
         double px = 0;
         uint32_t i = p->i, le;
-        if (i < p->n && (word_at(p, i, "height") || word_at(p, i, "width"))) {
-            int which = word_at(p, i, "height") ? SHAPE_HEIGHT : SHAPE_WIDTH;
+        if (blk) {
+            while (p->i < p->n && p->t[p->i].kind == TK_NEWLINE) p->i++;
+            i = p->i;
+            if (i >= p->n || p->t[i].kind == TK_EOF)
+                adda_error(line, "this insert is never closed - add End after its last line");
+            if (word_ci(p, i, "end") && line_end(p, i) == i + 1) { end_line(p, i + 1); break; }
+            if (word_ci(p, i, "text")) { add_kid(blk, parse_shape_text(p)); continue; }
+        }
+        if (i < p->n && (word_ci(p, i, "height") || word_ci(p, i, "width"))) {
+            int which = word_ci(p, i, "height") ? SHAPE_HEIGHT : SHAPE_WIDTH;
             uint32_t v = i + 1;
             le = line_end(p, i);
             if (v < le && p->t[v].kind == TK_ASSIGN) v++;
@@ -834,7 +995,12 @@ static Node *parse_insert(P *p)
             end_line(p, le);
             continue;
         }
-        if (i >= p->n || !px_word(&p->t[i], &px)) break;
+        if (i >= p->n || !px_word(&p->t[i], &px)) {
+            if (!blk) break;
+            adda_error_at(p->t[i].start, p->t[i].line,
+                          "a named shape holds only its distances (15px top), its size (height = 15px) "
+                          "and text lines - put End after them");
+        }
         le = line_end(p, i);
         i++;
         if (i >= le)
@@ -857,7 +1023,7 @@ static Node *parse_insert(P *p)
         }
         end_line(p, le);
     }
-    return n;
+    return blk ? blk : n;
 }
 
 static Node *parse_while(P *p)
@@ -1042,6 +1208,10 @@ static Node *statement(P *p)
     if (word_at(p, s, "delay") && !word_at(p, s + 1, "end")) return parse_delay(p);
 
     if (word_at(p, s, "insert")) return parse_insert(p);
+    /* text [box1] ... on its own adds to a shape drawn earlier */
+    if (word_ci(p, s, "text") && s + 1 < e && p->t[s + 1].kind == TK_LBRACE &&
+        p->t[s + 1].start[0] == '[')
+        return parse_shape_text(p);
 
     /* openApplication [title]: a blank window; the program waits for it to close */
     if (word_at(p, s, "openApplication")) {

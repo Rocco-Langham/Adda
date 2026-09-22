@@ -1,0 +1,5 @@
+openApplication T
+insert rounded box; name = [b]
+15px top, right, left
+Text [b] Hello; location middle-ish
+End

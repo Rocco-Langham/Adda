@@ -1,0 +1,4 @@
+tests/errors/shape_text_no_window.adda:1: text draws in the app window - put openApplication before it
+     1 | text [b] Hello
+       | ^
+exit: 65

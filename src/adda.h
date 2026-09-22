@@ -196,7 +196,18 @@ enum { SHAPE_BOX, SHAPE_ROUNDED_BOX, SHAPE_PILL, SHAPE_CIRCLE, SHAPE_OVAL,
 enum { SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM, SIDE_LEFT, SHAPE_WIDTH, SHAPE_HEIGHT,
        SHAPE_SPEC };
 extern const char *const ADDA_SHAPE_NAMES[SHAPE_COUNT];   /* "rounded box", ... */
-void adda_window_shape(int kind, const double spec[SHAPE_SPEC]);
+/* `name` is the shape's label from `insert box; name = [box1]`, or NULL */
+void adda_window_shape(int kind, const double spec[SHAPE_SPEC], const char *name);
+
+/* text [box1] Hello; font helvetica; size 15; location top left
+ * Writes `text` inside the shape called `name`. `font` is a font's name, any
+ * capitals, or NULL for the usual one; `size` is in points. `location` is
+ * TEXT_TOP/TEXT_MIDDLE/TEXT_BOTTOM times 3, plus TEXT_LEFT/TEXT_CENTRE/
+ * TEXT_RIGHT. False if no shape has that name. */
+enum { TEXT_LEFT = 0, TEXT_CENTRE = 1, TEXT_RIGHT = 2 };
+enum { TEXT_TOP = 0, TEXT_MIDDLE = 1, TEXT_BOTTOM = 2 };
+bool adda_window_shape_text(const char *name, const char *text, const char *font,
+                            double size, int location);
 /* Where a shape sits in a W x H window: x, y, width, height into `out`. A
  * given width or height is used as it is; otherwise both sides of a pair
  * decide the size, or it takes a default. It is then placed from the side
@@ -235,7 +246,8 @@ typedef enum {
     N_CALL,
     /* statements */
     N_BLOCK, N_ASSIGN, N_PRINT, N_IF, N_WHILE, N_FOREACH,
-    N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY, N_OPENAPP, N_SHAPE
+    N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY, N_OPENAPP, N_SHAPE,
+    N_SHAPETEXT
 } NodeKind;
 
 struct Node {

@@ -293,6 +293,36 @@ That is a strip 25px tall, 15px in from the top, left and right. A given size
 always wins; the shape is placed from whichever side has a distance (the top
 here), or centred when neither does. `width = 300px` works the same way across.
 
+#### Text in a shape
+
+Give a shape a name after a semicolon, and it becomes a block that ends with
+`End`. Inside it, a `text` line writes in the shape:
+
+```adda
+insert rounded box; name = [roundedbox1]
+15px top, right, left
+Height = 15px
+Text [roundedbox1] Hello; font helvetica; size15; location centre
+End
+```
+
+The name goes in square brackets, like a variable - but it is only the shape's
+label. After it come the words, then, each after a semicolon and all of them
+optional:
+
+| Setting | What it does |
+|---|---|
+| `font helvetica` | Any font on the computer, in any capitals. Leave it out for the usual one. |
+| `size 15` | The size in points (`size15` works too). 15 if you leave it out. |
+| `location top left` | Where in the shape: `left`, `centre`, `right`, `top`, `bottom`, or two together such as `top right` or `bottom-left`. Centre if you leave it out. |
+
+The words can hold variables (`text [panel] Hi [who]`), a shape can hold several
+text lines, and a `text [name] ...` line can also come later in the program, to
+write in a shape drawn earlier. Text too tall for its shape is centred across
+it rather than cut off. `Height`, `Text` and `End` work in any capitals.
+
+A shape with no name works just as before, with no `End`.
+
 The shapes are:
 
 | Shape | What it looks like |
@@ -580,7 +610,7 @@ import the `examples` folder.
 
 ## 14. Full list of words Adda reserves
 
-`print` `if` `else` `while` `for` `each` `in` `delay` `openApplication` `insert` `define` `with` `return` `call`
+`print` `if` `else` `while` `for` `each` `in` `delay` `openApplication` `insert` `text` `define` `with` `return` `call`
 `add` `to` `remove` `end` `list` `map` `item` `length` `has` `ask` `of`
 `is` `not` `and` `or` `true` `false` `nothing`
 
