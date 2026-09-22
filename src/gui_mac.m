@@ -359,6 +359,7 @@ static BOOL system_is_dark(void)
 static BOOL g_tidy = YES;
 static BOOL g_tidying;                 /* our own change to the text, not typing */
 #define TIDY_ARROW "\xe2\x80\x94\xe2\x80\x94>"   /* ——> */
+#define TIDY_BRANCH "\xe2\x94\x94\xe2\x94\x80>"  /* └─> before each line in a delay */
 static void tidy_update(void);
 
 /* Settings, Editor: colour the code (on unless it was turned off) */
@@ -1399,7 +1400,7 @@ static void rescan_files(void)
  * showing it, so anything saved, run or checked goes through here. */
 static NSString *raw_code(void)
 {
-    char *raw = tidy_raw(g_code.string.UTF8String, TIDY_ARROW);
+    char *raw = tidy_raw(g_code.string.UTF8String, TIDY_ARROW, TIDY_BRANCH);
     NSString *s = raw ? [NSString stringWithUTF8String:raw] : nil;
     free(raw);
     return s ? s : g_code.string;
@@ -1469,7 +1470,7 @@ static void tidy_update(void)
     caretCol = caret - lineStart;
 
     utf8 = text.UTF8String;
-    n = tidy_edits(utf8, TIDY_ARROW, g_code.window.firstResponder == g_code ? (long)caretLine : -1,
+    n = tidy_edits(utf8, TIDY_ARROW, TIDY_BRANCH, g_code.window.firstResponder == g_code ? (long)caretLine : -1,
                    g_tidy, ed, 128);
     if (!n) return;
 

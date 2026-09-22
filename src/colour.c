@@ -63,19 +63,25 @@ static bool is_number(const char *p, size_t n)
 }
 
 /* An arrow like the tidy view's: any run of dashes - plain ones, = signs, or
- * the long dash (in UTF-8, or the single byte Windows uses) - then a >.
- * Returns how many bytes it takes, or 0. */
+ * the long dash (in UTF-8, or the single byte Windows uses) - then a >. The
+ * branch before a line in a delay starts with a corner (or a | on Windows)
+ * and uses the box-drawing dash. Returns how many bytes it takes, or 0. */
 static size_t arrow_at(const char *p, const char *e)
 {
     const char *q = p;
+    if (e - q >= 3 && (unsigned char)q[0] == 0xE2 && (unsigned char)q[1] == 0x94 &&
+        (unsigned char)q[2] == 0x94) q += 3;                           /* └ */
+    else if (q < e && *q == '|') q++;
     for (;;) {
         if (q < e && (*q == '-' || *q == '=')) q++;
-        else if (e - q >= 3 && (unsigned char)q[0] == 0xE2 && (unsigned char)q[1] == 0x80 &&
-                 (unsigned char)q[2] == 0x94) q += 3;
+        else if (e - q >= 3 && (unsigned char)q[0] == 0xE2 &&
+                 (((unsigned char)q[1] == 0x80 && (unsigned char)q[2] == 0x94) ||    /* — */
+                  ((unsigned char)q[1] == 0x94 && (unsigned char)q[2] == 0x80))) q += 3;   /* ─ */
         else if (q < e && (unsigned char)*q == 0x97) q++;
         else break;
     }
-    return (q > p && q < e && *q == '>') ? (size_t)(q + 1 - p) : 0;
+    return (q > p && q < e && *q == '>' && !(*p == '|' && q == p + 1))
+           ? (size_t)(q + 1 - p) : 0;
 }
 
 static void colour_line(Spans *s, const char *base, const char *p, const char *e)

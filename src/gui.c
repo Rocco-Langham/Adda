@@ -269,6 +269,8 @@ static BOOL system_is_dark(void)
 static BOOL g_tidy = TRUE;
 static BOOL g_tidying;                /* our own change to the text, not typing */
 static const char *tidy_arrow(void) { return GetACP() == 1252 ? "\x97\x97>" : "==>"; }
+/* before each line in a delay: there is no corner in these code pages */
+static const char *tidy_branch(void) { return GetACP() == 1252 ? "|\x97>" : "|->"; }
 
 /* Settings, Editor: colour the code (on unless it was turned off) */
 static BOOL g_colours = TRUE;
@@ -1580,7 +1582,7 @@ static char *code_text(int *outLen)
     char *shown = malloc((size_t)len + 1), *text;
     if (!shown) return NULL;
     GetWindowTextA(hwndCode, shown, len + 1);
-    text = tidy_raw(shown, tidy_arrow());
+    text = tidy_raw(shown, tidy_arrow(), tidy_branch());
     free(shown);
     if (!text) return NULL;
     len = (int)strlen(text);
@@ -2138,7 +2140,7 @@ static void tidy_update(void)
         if (text[i] == '\n') { caretLine++; lineStart = i + 1; }
     caretCol = (long)selA - lineStart;
 
-    n = tidy_edits(text, tidy_arrow(), GetFocus() == hwndCode ? caretLine : -1, g_tidy, ed, 128);
+    n = tidy_edits(text, tidy_arrow(), tidy_branch(), GetFocus() == hwndCode ? caretLine : -1, g_tidy, ed, 128);
     if (!n) { free(text); return; }
 
     g_tidying = TRUE;
