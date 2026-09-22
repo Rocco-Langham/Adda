@@ -1,0 +1,4 @@
+tests/errors/input_outside_shape.adda:2: function goes inside a named shape, before its End - as in: insert box; name = [box1], then function - input box
+     2 | function - input box
+       | ^
+exit: 65

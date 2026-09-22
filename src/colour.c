@@ -37,7 +37,7 @@ static bool one_of(const char *p, size_t n, const char *const *words)
 static const char *const STATEMENTS[] = {
     "print", "if", "else", "while", "for", "define", "return", "call", "add",
     "remove", "end", "delay", "openApplication", "insert", "text", "height",
-    "width", NULL
+    "width", "function", NULL
 };
 
 /* words that start a value, straight after = or a { or a statement */

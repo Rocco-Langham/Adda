@@ -672,6 +672,27 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             return FLOW_NORMAL;
         }
 
+        case N_INPUT: {                    /* typing in a shape: wait for it */
+            const char *hint = NULL, *question = NULL, *typed;
+            double number;
+            Text *answer;
+            if (!adda_window_is_open())
+                adda_error(n->line, "an input box goes in the app window - put openApplication before it");
+            if (n->a) hint = value_to_text(eval(n->a, sc))->bytes;
+            if (n->b) question = value_to_text(eval(n->b, sc))->bytes;
+            fflush(stdout);              /* what came before shows first */
+            typed = adda_window_input(n->params[0]->bytes, hint, question);
+            if (!typed)
+                adda_error(n->line, "this computer cannot type into an app window");
+            /* like ask: 30 is a number you can add to */
+            answer = text_from_cstr(typed);
+            if (adda_number_from_text(answer->bytes, answer->len, &number))
+                scope_set(sc, n->name, number_value(number));
+            else
+                scope_set(sc, n->name, text_value(answer));
+            return FLOW_NORMAL;
+        }
+
         case N_OPENAPP: {
             const char *title = "Adda";
             if (n->a) {

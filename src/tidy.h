@@ -4,6 +4,7 @@
  *   15px top,right,left                  =>  15px ——> top, right, left
  *   Height = 15px                            Height ——> 15px
  *   text [box1] Hello; font impact; size15   text [box1] --> Hello --> font impact --> size 15
+ *   function - input box                     function ——> input box
  *   end                                      end
  *
  *   delay - 500                              delay ——> 500

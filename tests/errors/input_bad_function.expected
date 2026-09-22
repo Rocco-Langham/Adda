@@ -1,0 +1,4 @@
+tests/errors/input_bad_function.adda:3: the function a shape can have is an input box: function - input box
+     3 | function - button
+       | ^
+exit: 65

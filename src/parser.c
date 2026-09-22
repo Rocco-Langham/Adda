@@ -41,6 +41,7 @@ static Node *expr(E *e);
 static Node *primary(E *e);
 static Node *statement(P *p);
 static Node *parse_block(P *p, int stops, const char *opener, uint32_t opener_line);
+static Node *parse_assign(P *p, uint32_t s, uint32_t e, uint32_t eq);
 
 /* ------------------------------------------------------------------- nodes */
 
@@ -927,6 +928,10 @@ static Node *parse_insert(P *p)
     uint32_t line = p->t[s].line;
     Node *n = node(N_SHAPE, line);
     Node *blk = NULL;                   /* a named shape: the shape, then its text */
+    Node *hint = NULL;                  /* print ... in a named shape */
+    uint32_t hintLine = 0;
+    bool input = false;                 /* function - input box */
+    Node *asked = NULL;                 /* [x] = ask ... in a named shape */
     int k;
 
     /* the shape's kind is the rest of the line, e.g. "rounded box" - up to a
@@ -984,6 +989,62 @@ static Node *parse_insert(P *p)
                 adda_error(line, "this insert is never closed - add End after its last line");
             if (word_ci(p, i, "end") && line_end(p, i) == i + 1) { end_line(p, i + 1); break; }
             if (word_ci(p, i, "text")) { add_kid(blk, parse_shape_text(p)); continue; }
+            if (word_ci(p, i, "print")) {           /* an input box's hint, or words in it */
+                le = line_end(p, i);
+                if (le == i + 1)
+                    adda_error_at(p->t[i].start, p->t[i].line,
+                                  "what should it say? As in: print Type your name");
+                if (hint)
+                    adda_error_at(p->t[i].start, p->t[i].line,
+                                  "a shape has one print line - use text [%s] for more words",
+                                  n->name->bytes);
+                hint = parse_run(p, i + 1, le);
+                hintLine = p->t[i].line;
+                end_line(p, le);
+                continue;
+            }
+            if ((p->t[i].kind == TK_WORD && p->t[i].bracketed) ||
+                (p->t[i].kind == TK_LBRACE && p->t[i].start[0] == '[')) {   /* [x] = ... */
+                int eq;
+                Node *as;
+                le = line_end(p, i);
+                eq = find_top(p, i, le, TK_ASSIGN, NULL);
+                if (eq < 0)
+                    adda_error_at(p->t[i].start, p->t[i].line,
+                                  "give it a value, as in: %.*s = ask What is your name?",
+                                  (int)p->t[i].len, p->t[i].start);
+                as = parse_assign(p, i, le, (uint32_t)eq);
+                if (as->a->kind == N_VAR && as->b->kind == N_ASK) {
+                    /* the question goes in the shape, and the answer is typed there */
+                    if (asked || input)
+                        adda_error_at(p->t[i].start, as->line, "a shape takes one thing to type "
+                                      "in - one ask line, or function - input box");
+                    asked = node(N_INPUT, as->line);
+                    asked->name = as->a->name;
+                    asked->b = as->b->a;
+                    asked->params = adda_alloc(sizeof(Text *));
+                    asked->params[0] = n->name;
+                    asked->nparams = 1;
+                    add_kid(blk, asked);
+                } else {
+                    add_kid(blk, as);
+                }
+                continue;
+            }
+            if (word_ci(p, i, "function")) {        /* function - input box */
+                uint32_t v = i + 1;
+                le = line_end(p, i);
+                if (v < le && p->t[v].kind == TK_MINUS) v++;
+                if (v + 2 != le || !word_ci(p, v, "input") || !word_ci(p, v + 1, "box"))
+                    adda_error_at(p->t[i].start, p->t[i].line,
+                                  "the function a shape can have is an input box: function - input box");
+                if (asked)
+                    adda_error_at(p->t[i].start, p->t[i].line, "a shape takes one thing to type "
+                                  "in - one ask line, or function - input box");
+                input = true;
+                end_line(p, le);
+                continue;
+            }
         }
         if (i < p->n && (word_ci(p, i, "height") || word_ci(p, i, "width"))) {
             int which = word_ci(p, i, "height") ? SHAPE_HEIGHT : SHAPE_WIDTH;
@@ -1001,8 +1062,9 @@ static Node *parse_insert(P *p)
         if (i >= p->n || !px_word(&p->t[i], &px)) {
             if (!blk) break;
             adda_error_at(p->t[i].start, p->t[i].line,
-                          "a named shape holds only its distances (15px top), its size (height = 15px) "
-                          "and text lines - put End after them");
+                          "a named shape holds only its distances (15px top), its size (height = 15px), "
+                          "text lines, a print line, [variables] and function - input box - "
+                          "put End after them");
         }
         le = line_end(p, i);
         i++;
@@ -1025,6 +1087,25 @@ static Node *parse_insert(P *p)
             if (i < le && p->t[i].kind == TK_COMMA) i++;
         }
         end_line(p, le);
+    }
+
+    if (blk && input) {                 /* after its text, wait for typing */
+        Node *in = node(N_INPUT, line);
+        in->name = n->name;
+        in->a = hint;
+        in->params = adda_alloc(sizeof(Text *));
+        in->params[0] = n->name;
+        in->nparams = 1;
+        add_kid(blk, in);
+    } else if (asked) {                 /* the print line is the hint for its answer */
+        asked->a = hint;
+    } else if (blk && hint) {           /* no input box: the words go in the middle */
+        Node *t = node(N_SHAPETEXT, hintLine);
+        t->name = n->name;
+        t->a = hint;
+        t->number = 15;
+        t->op = TEXT_MIDDLE * 3 + TEXT_CENTRE;
+        add_kid(blk, t);
     }
     return blk ? blk : n;
 }
@@ -1259,6 +1340,9 @@ static Node *statement(P *p)
     }
     if (word_at(p, s, "delay"))
         adda_error_at(p->t[s].start, line, "there is no open delay for this 'delay end'");
+    if (word_ci(p, s, "function"))
+        adda_error_at(p->t[s].start, line, "function goes inside a named shape, before its "
+                      "End - as in: insert box; name = [box1], then function - input box");
     if (word_at(p, s, "for"))    return parse_foreach(p);
     if (word_at(p, s, "define")) return parse_define(p);
     if (word_at(p, s, "add"))    return parse_add(p, s, e);

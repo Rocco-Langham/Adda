@@ -88,6 +88,9 @@ static void collect(Lint *L, Node *n, bool inDefine)
     case N_SHAPE:
         if (n->name) add(&L->shapes, n->name->bytes, n->name->len, 0);
         break;
+    case N_INPUT:                               /* what is typed goes into [name] */
+        add(&L->vars, n->name->bytes, n->name->len, 0);
+        break;
     case N_OPENAPP:
         if (!inDefine && (!L->firstApp || n->line < L->firstApp)) L->firstApp = n->line;
         break;

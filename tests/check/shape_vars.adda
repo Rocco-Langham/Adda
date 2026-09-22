@@ -1,0 +1,10 @@
+# variables in a named shape: nothing is wrong here
+openApplication
+insert box; name = [box1]
+15px right,left
+100px top
+[name] = ask What is your name?
+[x] = 5
+text [box1] x is [x]; location bottom right
+end
+print Hello [name], {[x] + 1}

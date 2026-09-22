@@ -1,0 +1,5 @@
+openApplication
+insert box; name = [b]
+[a] = ask One?
+function - input box
+end

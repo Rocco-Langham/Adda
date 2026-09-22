@@ -1,0 +1,4 @@
+tests/errors/shape_two_inputs.adda:4: a shape takes one thing to type in - one ask line, or function - input box
+     4 | function - input box
+       | ^
+exit: 65

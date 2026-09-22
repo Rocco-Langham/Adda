@@ -1,0 +1,8 @@
+# an input box sets its [name]: nothing is wrong here
+openApplication
+insert rounded box; name = [input]
+print hello
+function - input box
+end
+print You said [input]
+print {[inptu]}

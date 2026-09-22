@@ -16,3 +16,8 @@ bool adda_window_shape_text(const char *name, const char *text, const char *font
     (void)name; (void)text; (void)font; (void)size; (void)location;
     return false;
 }
+const char *adda_window_input(const char *name, const char *hint, const char *question)
+{
+    (void)name; (void)hint; (void)question;
+    return NULL;
+}

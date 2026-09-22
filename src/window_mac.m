@@ -9,6 +9,7 @@
 #import <Cocoa/Cocoa.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "adda.h"
 
 /* one shape: what it is, where it goes, its name if it has one, and the
@@ -18,6 +19,8 @@
 @property (strong) NSArray<NSNumber *> *spec;          /* SHAPE_SPEC numbers */
 @property (copy) NSString *name;
 @property (strong) NSMutableArray<NSDictionary *> *texts;   /* text, font, location */
+@property (strong) NSTextField *field;                     /* a place to type */
+@property BOOL fieldLow;                                   /* under a question */
 @end
 @implementation AddaShape
 @end
@@ -28,12 +31,14 @@
 @end
 
 @interface AddaWatcher : NSObject <NSWindowDelegate>
+- (void)entered:(id)sender;
 @end
 
 static NSWindow   *g_window;
 static AddaCanvas *g_canvas;
 static AddaWatcher *g_watcher;
 static bool        g_closed;
+static bool        g_entered;      /* Enter was pressed in the input box */
 
 /* A font by name, in any capitals - "helvetica" finds Helvetica - or the
  * usual one when there is no such font. */
@@ -85,9 +90,37 @@ static void draw_texts(AddaShape *sh, NSRect box)
     }
 }
 
+/* Where a shape sits in the window, as drawn. */
+static NSRect shape_box(AddaShape *sh, NSRect bounds)
+{
+    double in[SHAPE_SPEC], r[4];
+    int k;
+    for (k = 0; k < SHAPE_SPEC; k++) in[k] = sh.spec[(NSUInteger)k].doubleValue;
+    adda_shape_rect(sh.kind, in, NSWidth(bounds), NSHeight(bounds), r);
+    return NSMakeRect(r[0], r[1], r[2], r[3]);
+}
+
+/* An input box's field: one line, across the middle of its shape. */
+static void place_field(AddaShape *sh, NSRect bounds)
+{
+    NSRect box = shape_box(sh, bounds);
+    CGFloat pad = sh.kind == SHAPE_PILL ? NSHeight(box) / 2 : NSWidth(box) > 40 ? 12 : 2;
+    CGFloat h = ceil(sh.field.intrinsicContentSize.height);
+    CGFloat mid = sh.fieldLow ? NSMinY(box) + NSHeight(box) * 0.68 : NSMidY(box);
+    if (pad * 2 > NSWidth(box) - 10) pad = 5;
+    sh.field.frame = NSMakeRect(NSMinX(box) + pad, mid - h / 2, NSWidth(box) - pad * 2, h);
+}
+
 @implementation AddaCanvas
 
 - (BOOL)isFlipped { return YES; }
+
+- (void)resizeSubviewsWithOldSize:(NSSize)old
+{
+    (void)old;
+    for (AddaShape *sh in self.shapes)
+        if (sh.field) place_field(sh, self.bounds);
+}
 
 - (void)drawRect:(NSRect)dirty
 {
@@ -147,6 +180,16 @@ static void draw_texts(AddaShape *sh, NSRect box)
         path.lineWidth = 1;
         [path stroke];
         draw_texts(sh, box);
+        if (sh.field && sh.fieldLow) {              /* where the answer goes */
+            NSRect f = sh.field.frame;
+            NSBezierPath *u = [NSBezierPath bezierPath];
+            CGFloat inset = NSWidth(f) > 80 ? NSWidth(f) * 0.15 : 0;
+            [u moveToPoint:NSMakePoint(NSMinX(f) + inset, NSMaxY(f) + 2)];
+            [u lineToPoint:NSMakePoint(NSMaxX(f) - inset, NSMaxY(f) + 2)];
+            u.lineWidth = 1;
+            [[NSColor.labelColor colorWithAlphaComponent:0.35] setStroke];
+            [u stroke];
+        }
     }
     if (!all.length) return;
 
@@ -170,6 +213,7 @@ static void draw_texts(AddaShape *sh, NSRect box)
 
 @implementation AddaWatcher
 - (void)windowWillClose:(NSNotification *)n { (void)n; g_closed = true; }
+- (void)entered:(id)sender { (void)sender; g_entered = true; }
 @end
 
 /* Handles whatever has happened to the window - clicks, resizes, redraws -
@@ -275,6 +319,60 @@ bool adda_window_shape_text(const char *name, const char *text, const char *font
     [g_canvas displayIfNeeded];
     pump([NSDate date]);
     return true;
+}
+
+const char *adda_window_input(const char *name, const char *hint, const char *question)
+{
+    static char *typed;
+    AddaShape *found = nil;
+    NSString *want = @(name);
+    NSTextField *f;
+
+    for (AddaShape *sh in g_canvas.shapes)       /* the latest shape with that name */
+        if (sh.name && [sh.name caseInsensitiveCompare:want] == NSOrderedSame) found = sh;
+    if (!found) return NULL;
+
+    /* a question: written at the top of the shape, the answer typed under it -
+     * or, in a shape too short for both, shown as the hint */
+    if (question && *question) {
+        if (NSHeight(shape_box(found, g_canvas.bounds)) >= 70) {
+            adda_window_shape_text(name, question, NULL, 17, TEXT_TOP * 3 + TEXT_CENTRE);
+            found.fieldLow = YES;
+            if (!hint) hint = "Type here";
+        } else if (!hint) {
+            hint = question;
+        }
+    }
+
+    f = [NSTextField new];
+    f.bezeled = NO;
+    f.bordered = NO;
+    f.drawsBackground = NO;
+    f.focusRingType = NSFocusRingTypeNone;
+    f.font = [NSFont systemFontOfSize:18];
+    f.textColor = NSColor.labelColor;
+    f.alignment = NSTextAlignmentCenter;
+    f.placeholderString = hint ? [NSString stringWithUTF8String:hint] : nil;
+    f.usesSingleLineMode = YES;
+    f.cell.scrollable = YES;
+    f.target = g_watcher;
+    f.action = @selector(entered:);
+    found.field = f;
+    [g_canvas addSubview:f];
+    place_field(found, g_canvas.bounds);
+    [g_window makeKeyAndOrderFront:nil];
+    [g_window makeFirstResponder:f];
+
+    g_entered = false;
+    while (!g_entered) pump([NSDate dateWithTimeIntervalSinceNow:0.05]);
+
+    /* done: what was typed stays in the box, but it takes no more */
+    f.editable = NO;
+    f.selectable = NO;
+    [g_window makeFirstResponder:nil];
+    free(typed);
+    typed = strdup(f.stringValue.UTF8String ? f.stringValue.UTF8String : "");
+    return typed;
 }
 
 void adda_window_wait_ms(double ms)

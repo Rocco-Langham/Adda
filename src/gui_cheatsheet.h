@@ -416,6 +416,16 @@ static const Cheat CHEAT_SHAPES[] = {
   "Draws a circle called [dot] and ends its block straight away. Later, the text line writes Score: followed by the value of [score] inside it, in Courier New at size 18.",
   "insert circle; name = [dot]\r\nend\r\n[score] = 10\r\ntext [dot] Score: [score]; font courier new; size 18", 0 },
 
+{ "Make a box to type in",
+  "function - input box lets the person type into a shape. input, type, text box, textbox, field, entry, enter",
+  "Draws a rounded box called [input] and makes it a place to type. hello shows faintly in it until they start typing. The program waits at End until they type something and press Enter; then [input] holds what they typed, so the last line prints You said and their words. It needs openApplication first, like every shape.",
+  "openApplication\r\ninsert rounded box; name = [input]\r\nprint hello\r\nfunction - input box\r\nend\r\nprint You said [input]", 0 },
+
+{ "Ask a question in a shape",
+  "An ask line inside a shape writes the question in it, and the answer is typed there. ask, question, input, type, answer",
+  "Draws a box 100px from the top and 15px from the left and right. The question What is your name? is written at the top of the box, and the person types their answer under it and presses Enter. The program waits at End until they do; then [name] holds the answer, so the last line prints Hello and their name. It needs openApplication first.",
+  "openApplication\r\ninsert box; name = [box1]\r\n15px right,left\r\n100px top\r\n[name] = ask What is your name?\r\nend\r\nprint Hello [name]", 0 },
+
 { "Circle",
   "The biggest circle that fits its space; 100px across on its own. round, dot, ball",
   "Draws a circle in your app window. No distance lines are given, so it is 100px across and sits right in the centre of the window. It only works after an openApplication line.",

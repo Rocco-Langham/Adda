@@ -217,6 +217,13 @@ enum { TEXT_LEFT = 0, TEXT_CENTRE = 1, TEXT_RIGHT = 2 };
 enum { TEXT_TOP = 0, TEXT_MIDDLE = 1, TEXT_BOTTOM = 2 };
 bool adda_window_shape_text(const char *name, const char *text, const char *font,
                             double size, int location);
+/* function - input box, or [x] = ask ... inside a named shape: makes the
+ * shape called `name` a box to type in, and waits until the person has typed
+ * and pressed Enter. `hint` shows faintly while it is empty (NULL for none).
+ * A `question` (NULL for none) is written in the shape, above where they
+ * type - or, in a shape too short for both, is the hint. Returns what they
+ * typed, good until the next call, or NULL when no shape has that name. */
+const char *adda_window_input(const char *name, const char *hint, const char *question);
 /* Where a shape sits in a W x H window: x, y, width, height into `out`. A
  * given width or height is used as it is; otherwise both sides of a pair
  * decide the size, or it takes a default. It is then placed from the side
@@ -257,7 +264,9 @@ typedef enum {
     N_BLOCK, N_ASSIGN, N_PRINT, N_IF, N_WHILE, N_FOREACH,
     N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY, N_OPENAPP, N_SHAPE,
     N_SHAPETEXT,
-    N_GOTO        /* return (3) outside a function: go back to line 3 */
+    N_GOTO,       /* return (3) outside a function: go back to line 3 */
+    N_INPUT       /* typing into a named shape (params[0]), kept in [name]: function - input
+                   * box, or [name] = ask ... with its question in b */
 } NodeKind;
 
 struct Node {

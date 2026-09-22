@@ -1,4 +1,4 @@
-tests/errors/shape_named_no_end.adda:4: a named shape holds only its distances (15px top), its size (height = 15px) and text lines - put End after them
-     4 | print oops
+tests/errors/shape_named_no_end.adda:4: a named shape holds only its distances (15px top), its size (height = 15px), text lines, a print line, [variables] and function - input box - put End after them
+     4 | hello there
        | ^
 exit: 65

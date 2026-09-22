@@ -199,6 +199,21 @@ static char *convert(const char *s, const char *e, const char *arrow, bool to_ti
         return done(&o);
     }
 
+    /* function - input box   <->   function ——> input box */
+    if (word_at(p, e, "function")) {
+        const char *r = skip_sp(p + 8, e);
+        bool isTidy = starts(r, e, arrow);
+        if (isTidy == to_tidy) { free(o.b); return NULL; }
+        if (isTidy) r = skip_sp(r + strlen(arrow), e);
+        else if (r < e && *r == '-') r = skip_sp(r + 1, e);
+        if (r == e) { free(o.b); return NULL; }
+        put(&o, p, 8);                                   /* "function", as typed */
+        puts_(&o, to_tidy ? " " : " - ");
+        if (to_tidy) { puts_(&o, arrow); puts_(&o, " "); }
+        put(&o, r, (size_t)(e - r));
+        return done(&o);
+    }
+
     /* text [x] Hello; font impact; size15   <->   text [x] --> Hello --> font impact --> size 15 */
     if (word_at(p, e, "text")) {
         const char *t = p, *r = skip_sp(p + 4, e), *nm, *nme;

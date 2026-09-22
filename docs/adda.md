@@ -370,6 +370,49 @@ it rather than cut off. `Height`, `Text` and `End` work in any capitals.
 
 A shape with no name works just as before, with no `End`.
 
+#### A box to type in
+
+A named shape can be a place for the person to type. `function - input box`
+makes it one, and a `print` line inside the block is a hint that shows
+faintly while the box is empty:
+
+```adda
+openApplication
+insert rounded box; name = [input]
+40px top,right,left
+print Type your name
+function - input box
+end
+print You said [input]
+```
+
+The program waits at `End` until something is typed and Enter is pressed.
+Then the shape's name holds what was typed - `[input]` here - just like
+`[name] = ask ...`, so a number typed in is a number you can add to. What was
+typed stays in the box. In a shape without `function - input box`, a `print`
+line puts its words in the middle of the shape. In the tidy view the line
+shows as `function ——> input box`.
+
+A shape can also ask a question. `[name] = ask ...` inside a named shape
+writes the question at the top of the shape and puts the place to type under
+it, instead of asking in the console:
+
+```adda
+openApplication
+insert box; name = [box1]
+15px right,left
+100px top
+[name] = ask What is your name?
+end
+print Hello [name]
+```
+
+The program waits at `End` for the answer, and `[name]` holds it. In a shape
+too short for both (under 70px), the question is shown faintly in the box
+instead. A shape takes one thing to type in: one `ask` line, or
+`function - input box`. Any other `[variable] = ...` line can go in a shape
+too, and works just as it does outside one.
+
 The shapes are:
 
 | Shape | What it looks like |

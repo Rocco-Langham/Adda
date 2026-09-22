@@ -23,6 +23,74 @@ typedef struct { int shape; char *text; char font[64]; double size; int location
 static ShapeText *g_texts;
 static int        g_textCount;
 
+/* function - input box: an edit box over its shape */
+typedef struct { int shape; HWND edit; char *hint; bool low; } Input;   /* low: under a question */
+static Input  *g_inputs;
+static int     g_inputCount;
+static HFONT   g_inputFont;
+static WNDPROC g_editProc;       /* the edit box's own window procedure */
+static bool    g_entered;        /* Enter was pressed in the input box */
+
+/* Where shape i sits in a w x h window. */
+static RECT shape_box(int i, int w, int h)
+{
+    double r[4];
+    RECT box;
+    adda_shape_rect(g_shapes[i].kind, g_shapes[i].inset, w, h, r);
+    box.left = (LONG)r[0];
+    box.top = (LONG)r[1];
+    box.right = (LONG)(r[0] + r[2]);
+    box.bottom = (LONG)(r[1] + r[3]);
+    return box;
+}
+
+/* An input box's edit: one line, across the middle of its shape. */
+static void place_inputs(void)
+{
+    RECT rc;
+    int i;
+    GetClientRect(g_window, &rc);
+    for (i = 0; i < g_inputCount; i++) {
+        RECT box = shape_box(g_inputs[i].shape, rc.right, rc.bottom);
+        int w = box.right - box.left, h = 32;
+        int mid = g_inputs[i].low ? box.top + (box.bottom - box.top) * 68 / 100
+                                  : (box.top + box.bottom) / 2;
+        int pad = g_shapes[g_inputs[i].shape].kind == SHAPE_PILL ? (box.bottom - box.top) / 2
+                : w > 40 ? 12 : 2;
+        if (pad * 2 > w - 10) pad = 5;
+        MoveWindow(g_inputs[i].edit, box.left + pad, mid - h / 2, w - pad * 2, h, TRUE);
+    }
+}
+
+/* Enter ends the typing; an empty box shows its hint, faintly. */
+static LRESULT CALLBACK input_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
+{
+    if (msg == WM_KEYDOWN && w == VK_RETURN) { g_entered = true; return 0; }
+    if (msg == WM_CHAR && (w == '\r' || w == '\n')) return 0;        /* no beep */
+    if (msg == WM_PAINT) {
+        LRESULT res = CallWindowProcA(g_editProc, h, msg, w, l);
+        int i;
+        if (GetWindowTextLengthA(h) == 0)
+            for (i = 0; i < g_inputCount; i++)
+                if (g_inputs[i].edit == h && g_inputs[i].hint) {
+                    HDC dc = GetDC(h);
+                    RECT rc;
+                    HGDIOBJ old = SelectObject(dc, g_inputFont);
+                    GetClientRect(h, &rc);
+                    SetBkMode(dc, TRANSPARENT);
+                    SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
+                    DrawTextA(dc, g_inputs[i].hint, -1, &rc,
+                              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                    SelectObject(dc, old);
+                    ReleaseDC(h, dc);
+                }
+        return res;
+    }
+    if (msg == WM_CHAR || msg == WM_KEYDOWN)       /* the hint goes as typing starts */
+        InvalidateRect(h, NULL, TRUE);
+    return CallWindowProcA(g_editProc, h, msg, w, l);
+}
+
 /* Each piece of a shape's text, placed inside it - left, centre or right,
  * top, middle or bottom - with a little room to the edge. Text too tall for
  * its shape is not cut off: it sits across the shape's middle instead. */
@@ -129,6 +197,26 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
                     RoundRect(dc, x, y, x + w, y + ht, round, round);
                 }
                 draw_texts(dc, i, x, y, w, ht);
+                for (k = 0; k < g_inputCount; k++) {  /* where an answer goes */
+                    RECT f;
+                    POINT a, b;
+                    HPEN line;
+                    HGDIOBJ was;
+                    int inset;
+                    if (g_inputs[k].shape != i || !g_inputs[k].low) continue;
+                    GetWindowRect(g_inputs[k].edit, &f);
+                    a.x = f.left; a.y = f.bottom;
+                    b.x = f.right; b.y = f.bottom;
+                    ScreenToClient(h, &a);
+                    ScreenToClient(h, &b);
+                    inset = (b.x - a.x) > 80 ? (b.x - a.x) * 15 / 100 : 0;
+                    line = CreatePen(PS_SOLID, 1, mix(bg, fg, 35));
+                    was = SelectObject(dc, line);
+                    MoveToEx(dc, a.x + inset, a.y + 2, NULL);
+                    LineTo(dc, b.x - inset, b.y + 2);
+                    SelectObject(dc, was);
+                    DeleteObject(line);
+                }
             }
             SelectObject(dc, ob); SelectObject(dc, op);
             DeleteObject(fill); DeleteObject(edge);
@@ -152,6 +240,7 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
         return 0;
     }
     case WM_SIZE:
+        if (g_inputCount) place_inputs();
         InvalidateRect(h, NULL, FALSE);
         return 0;
     case WM_DESTROY:            /* the window was closed: so is the program */
@@ -260,6 +349,76 @@ bool adda_window_shape_text(const char *name, const char *text, const char *font
     UpdateWindow(g_window);
     pump();
     return true;
+}
+
+const char *adda_window_input(const char *name, const char *hint, const char *question)
+{
+    static char *typed;
+    Input *grown;
+    HWND edit;
+    int i, found = -1, len;
+    bool low;
+
+    for (i = 0; i < g_shapeCount; i++)            /* the latest shape with that name */
+        if (g_shapes[i].name[0] && lstrcmpiA(g_shapes[i].name, name) == 0) found = i;
+    if (found < 0) return NULL;
+
+    /* a question: written at the top of the shape, the answer typed under it -
+     * or, in a shape too short for both, shown as the hint */
+    low = false;
+    if (question && *question) {
+        RECT rc, box;
+        GetClientRect(g_window, &rc);
+        box = shape_box(found, rc.right, rc.bottom);
+        if (box.bottom - box.top >= 70) {
+            adda_window_shape_text(name, question, NULL, 13, TEXT_TOP * 3 + TEXT_CENTRE);
+            low = true;
+            if (!hint) hint = "Type here";
+        } else if (!hint) {
+            hint = question;
+        }
+    }
+
+    grown = realloc(g_inputs, sizeof *g_inputs * (size_t)(g_inputCount + 1));
+    if (!grown) return NULL;
+    g_inputs = grown;
+    if (!g_inputFont)
+        g_inputFont = CreateFontA(-24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
+    edit = CreateWindowExA(0, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_CENTER | ES_AUTOHSCROLL,
+                           0, 0, 0, 0, g_window, NULL, GetModuleHandleA(NULL), NULL);
+    if (!edit) return NULL;
+    SendMessageA(edit, WM_SETFONT, (WPARAM)g_inputFont, TRUE);
+    g_editProc = (WNDPROC)SetWindowLongPtrA(edit, GWLP_WNDPROC, (LONG_PTR)input_proc);
+    g_inputs[g_inputCount].shape = found;
+    g_inputs[g_inputCount].edit = edit;
+    g_inputs[g_inputCount].hint = NULL;
+    g_inputs[g_inputCount].low = low;
+    if (hint) {
+        g_inputs[g_inputCount].hint = malloc(strlen(hint) + 1);
+        if (g_inputs[g_inputCount].hint) strcpy(g_inputs[g_inputCount].hint, hint);
+    }
+    g_inputCount++;
+    place_inputs();
+    SetForegroundWindow(g_window);
+    SetFocus(edit);
+
+    g_entered = false;
+    while (!g_entered) {                          /* closing the window exits */
+        MsgWaitForMultipleObjects(0, NULL, FALSE, INFINITE, QS_ALLINPUT);
+        pump();
+    }
+
+    /* done: what was typed stays in the box, but it takes no more */
+    SendMessageA(edit, EM_SETREADONLY, TRUE, 0);
+    SetFocus(g_window);
+    len = GetWindowTextLengthA(edit);
+    free(typed);
+    typed = malloc((size_t)len + 1);
+    if (!typed) return "";
+    GetWindowTextA(edit, typed, len + 1);
+    return typed;
 }
 
 void adda_window_wait_ms(double ms)

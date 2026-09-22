@@ -1,5 +1,5 @@
 openApplication T
 insert box; name = [b]
 15px top
-print oops
+hello there
 end
