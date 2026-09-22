@@ -142,6 +142,7 @@ static HWND  hwndCheatFind, hwndCheatList;
 
 static HBRUSH hBrushBg, hBrushSurface, hBrushAb;
 static HFONT  hFontMono, hFontUI, hFontUIBold, hFontSmall;
+static HFONT  hFontTitle, hFontBody;      /* a cheat sheet entry's own page */
 static int    g_dpi = 96;
 
 /* ── activity bar ────────────────────────────────────────────────── */
@@ -217,7 +218,10 @@ static int  g_renameIdx = -1;
 
 /* ── cheat sheet filtering ───────────────────────────────────────── */
 static const Cheat *g_cheatShown[CHEAT_MAX];
-static BOOL g_cheatTurned;          /* the last click followed a link */
+static const Cheat *g_cheatOpen;    /* the entry whose own page is showing, or NULL */
+static RECT  g_cheatBack;           /* the Back button on that page */
+static BOOL  g_cheatBackHot;
+static DWORD g_cheatTick;           /* when a click last turned a page or opened one */
 static int g_cheatCount;
 
 #define S(x) MulDiv((x), g_dpi, 96)
@@ -353,7 +357,11 @@ static void build_fonts(void)
     if (hFontUI)     DeleteObject(hFontUI);
     if (hFontUIBold) DeleteObject(hFontUIBold);
     if (hFontSmall)  DeleteObject(hFontSmall);
+    if (hFontTitle)  DeleteObject(hFontTitle);
+    if (hFontBody)   DeleteObject(hFontBody);
 
+    hFontTitle  = make_font(14, FW_SEMIBOLD, "Segoe UI");
+    hFontBody   = make_font(10, FW_NORMAL,   "Segoe UI");
     hFontMono   = make_font(11, FW_NORMAL,   "Consolas");
     hFontUI     = make_font(9,  FW_NORMAL,   "Segoe UI");
     hFontUIBold = make_font(9,  FW_SEMIBOLD, "Segoe UI");
@@ -724,25 +732,47 @@ static void get_adda_path(char *buf, int size)
     strncat(buf, "adda.exe", size - (int)strlen(buf) - 1);
 }
 
-/* the project folder New Project made, with a trailing backslash; empty
- * until then, when the Explorer looks beside the exe */
+/* The open project's folder, with a trailing backslash, or "" when there is
+ * none. The Explorer shows this folder and nothing else, and which one it was
+ * is remembered between launches. */
 static char g_projectDir[MAX_PATH + 2];
 
-static void exe_dir(char *buf, int size)
-{
-    char *sep;
-
-    GetModuleFileNameA(NULL, buf, size);
-    sep = strrchr(buf, '\\');
-    if (sep) *(sep + 1) = '\0';
-    else     buf[0] = '\0';
-}
-
-/* where the Explorer looks, and where Import and Save As start */
+/* where the Explorer looks, and where Import and Save As start: the project,
+ * or "" when none is open */
 static void explorer_dir(char *buf, int size)
 {
-    if (g_projectDir[0]) snprintf(buf, (size_t)size, "%s", g_projectDir);
-    else exe_dir(buf, size);
+    snprintf(buf, (size_t)size, "%s", g_projectDir);
+}
+
+static void remember_project(void)
+{
+    HKEY key;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Adda", 0, NULL, 0,
+                        KEY_WRITE, NULL, &key, NULL) == ERROR_SUCCESS) {
+        RegSetValueExA(key, "Project", 0, REG_SZ, (const BYTE *)g_projectDir,
+                       (DWORD)strlen(g_projectDir) + 1);
+        RegCloseKey(key);
+    }
+}
+
+/* the project that was open last time, if it is still there; else "" */
+static void recall_project(char *buf, DWORD size)
+{
+    HKEY key;
+    DWORD type = 0, got = size - 1, attrs;
+
+    buf[0] = '\0';
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Adda", 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return;
+    if (RegQueryValueExA(key, "Project", NULL, &type, (BYTE *)buf, &got) != ERROR_SUCCESS ||
+        type != REG_SZ)
+        got = 0;
+    buf[got < size ? got : size - 1] = '\0';
+    RegCloseKey(key);
+
+    attrs = buf[0] ? GetFileAttributesA(buf) : INVALID_FILE_ATTRIBUTES;
+    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) buf[0] = '\0';
 }
 
 /* ── console text ────────────────────────────────────────────────── */
@@ -1178,30 +1208,15 @@ static void scan_dir(const char *dir)
     FindClose(h);
 }
 
-/* Straight after an import the Explorer lists only what was imported; the
- * next full reload (rescan_files) brings everything else back. */
-static BOOL g_importOnly;
-
+/* The programs in the open project, and nothing else; none when no project
+ * is open. */
 static void rescan_files(void)
 {
-    char dir[MAX_PATH], sub[MAX_PATH * 2];
     int i;
 
-    g_importOnly = FALSE;
     g_fileCount = 0;
-    explorer_dir(dir, sizeof(dir));
-    scan_dir(dir);
+    if (g_projectDir[0]) scan_dir(g_projectDir);
 
-    if (g_projectDir[0]) goto fill;        /* a project is just its own folder */
-
-    snprintf(sub, sizeof(sub), "%sexamples\\", dir);
-    scan_dir(sub);
-
-    /* ..\examples too, since the exe usually sits in the repo root */
-    snprintf(sub, sizeof(sub), "%s..\\examples\\", dir);
-    scan_dir(sub);
-
-fill:
     if (!hwndFiles) return;
     SendMessageA(hwndFiles, LB_RESETCONTENT, 0, 0);
     for (i = 0; i < g_fileCount; i++)
@@ -1229,13 +1244,31 @@ static char *code_text(int *outLen)
     return text;
 }
 
+/* the project folder's own name, without the path or the trailing backslash */
+static void project_name(char *buf, size_t size)
+{
+    char dir[MAX_PATH + 2];
+    size_t n;
+    const char *leaf;
+
+    snprintf(dir, sizeof dir, "%s", g_projectDir);
+    n = strlen(dir);
+    while (n > 0 && dir[n - 1] == '\\') dir[--n] = '\0';
+    leaf = strrchr(dir, '\\');
+    snprintf(buf, size, "%s", leaf ? leaf + 1 : dir);
+}
+
 static void show_current(void)
 {
-    char title[MAX_PATH + 16];
+    char title[MAX_PATH * 5], project[MAX_PATH + 2];
     const char *name = strrchr(g_curPath, '\\');
+
     name = name ? name + 1 : g_curPath;
-    if (g_curPath[0]) snprintf(title, sizeof title, "%s - Adda", name);
-    else snprintf(title, sizeof title, "Adda");
+    project_name(project, sizeof project);
+    if (g_curPath[0] && project[0]) snprintf(title, sizeof title, "%s - %s", name, project);
+    else if (g_curPath[0])          snprintf(title, sizeof title, "%s - Adda", name);
+    else if (project[0])            snprintf(title, sizeof title, "%s - Adda", project);
+    else                            snprintf(title, sizeof title, "Adda");
     SetWindowTextA(hwndMain, title);
 }
 
@@ -1592,6 +1625,7 @@ static HDWP move_child(HDWP dwp, HWND h, int x, int y, int w, int ht, UINT extra
     if (!dwp) {
         MoveWindow(h, x, y, w, ht, TRUE);
         if (extra & SWP_SHOWWINDOW) ShowWindow(h, SW_SHOW);
+        if (extra & SWP_HIDEWINDOW) ShowWindow(h, SW_HIDE);
         return NULL;
     }
     return DeferWindowPos(dwp, h, NULL, x, y, w, ht, SWP_NOZORDER | extra);
@@ -1670,8 +1704,10 @@ static void layout(HWND hwnd)
     dwp = BeginDeferWindowPos(6);
 
     if (g_view == AB_EXPLORER) {
+        /* with no project there is nothing to list; paint_main says so instead */
         dwp = move_child(dwp, hwndFiles, abW + S(8), S(40),
-                         panelW - S(16), rc.bottom - S(48) - S(40), SWP_SHOWWINDOW);
+                         panelW - S(16), rc.bottom - S(48) - S(40),
+                         g_projectDir[0] ? SWP_SHOWWINDOW : SWP_HIDEWINDOW);
         {
             int b;
             for (b = 0; b < BAR_COUNT; b++) {
@@ -2054,9 +2090,30 @@ static void paint_main(HWND hwnd, HDC hdc)
         title.left += S(14);
         title.top  += S(12);
         title.bottom = title.top + S(20);
-        text_at(hdc, title,
-                (g_view == AB_SEARCH) ? "SEARCH" : g_importOnly ? "IMPORTED" : "EXPLORER",
-                hFontSmall, g_t.muted, DT_LEFT | DT_SINGLELINE);
+        {
+            char heading[MAX_PATH + 2];
+            snprintf(heading, sizeof heading, "%s", (g_view == AB_SEARCH) ? "SEARCH" : "EXPLORER");
+            if (g_view == AB_EXPLORER && g_projectDir[0]) {
+                project_name(heading, sizeof heading);
+                CharUpperA(heading);
+            }
+            text_at(hdc, title, heading, hFontSmall, g_t.muted,
+                    DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        }
+
+        if (g_view == AB_EXPLORER && !g_projectDir[0]) {
+            /* nothing to list: say how to get a project */
+            RECT line = g_panelRect;
+            line.left += S(14);
+            line.right -= S(14);
+            line.top = S(48);
+            line.bottom = line.top + S(18);
+            text_at(hdc, line, "No project open", hFontUIBold, g_t.text, DT_LEFT | DT_SINGLELINE);
+            line.top = S(72);
+            line.bottom = g_panelRect.bottom - S(60);
+            text_at(hdc, line, "New Project makes one. Import can open a folder you already have.",
+                    hFontSmall, g_t.muted, DT_LEFT | DT_WORDBREAK);
+        }
 
         edge = g_panelRect;
         edge.left = edge.right - 1;
@@ -2422,18 +2479,115 @@ static void refresh_cheats(void)
     if (g_cheatCount) SendMessageA(hwndCheatList, LB_SETCURSEL, 0, 0);
 }
 
-static void insert_cheat(int shownIndex)
+/* Shows an entry's own page - what it does, and an example to read and type
+ * out - or, given NULL, goes back to the list. Nothing is ever pasted into the
+ * program: the cheat sheet explains, and the typing is left to the reader. */
+static void show_cheat(const Cheat *c)
 {
+    g_cheatOpen = c;
+    g_cheatBackHot = FALSE;
+    if (!hwndCheats) return;
+    ShowWindow(hwndCheatFind, c ? SW_HIDE : SW_SHOW);
+    ShowWindow(hwndCheatList, c ? SW_HIDE : SW_SHOW);
+    InvalidateRect(hwndCheats, NULL, TRUE);
+    SetFocus(c ? hwndCheats : hwndCheatFind);
+}
+
+/* A click on a row: a topic (or the way back) turns the page, anything else
+ * opens its own page. */
+static void open_cheat(int shownIndex)
+{
+    const Cheat *c;
+
     if (shownIndex < 0 || shownIndex >= g_cheatCount) return;
-    if (!g_cheatShown[shownIndex]->snippet) {   /* a link: turn the page */
-        g_cheatPage = g_cheatShown[shownIndex]->page;
+    c = g_cheatShown[shownIndex];
+    g_cheatTick = GetTickCount();
+    if (!c->snippet) {                          /* a link: turn the page */
+        g_cheatPage = c->page;
         if (hwndCheatFind) SetWindowTextA(hwndCheatFind, "");   /* a new page starts unfiltered */
         refresh_cheats();
         return;
     }
-    SendMessageA(hwndCode, EM_REPLACESEL, TRUE,
-                 (LPARAM)g_cheatShown[shownIndex]->snippet);
-    SetFocus(hwndCode);
+    show_cheat(c);
+}
+
+/* wrapped text; returns the height it took */
+static int text_wrapped(HDC hdc, RECT r, const char *s, HFONT font, COLORREF colour)
+{
+    HGDIOBJ old = SelectObject(hdc, font);
+    RECT m = r;
+    int h;
+
+    DrawTextA(hdc, s, -1, &m, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+    SelectObject(hdc, old);
+    h = m.bottom - m.top;
+    r.bottom = r.top + h;
+    text_at(hdc, r, s, font, colour, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+    return h;
+}
+
+/* An entry's own page: the way back, what it does, and an example. */
+static void paint_cheat_page(HDC hdc, RECT rc)
+{
+    const Cheat *c = g_cheatOpen;
+    RECT r, box;
+    TEXTMETRICA tm;
+    HGDIOBJ old;
+    const char *line;
+    int y, lineH, lines = 1;
+
+    g_cheatBack.left = S(14);
+    g_cheatBack.top = S(14);
+    g_cheatBack.right = g_cheatBack.left + S(74);
+    g_cheatBack.bottom = g_cheatBack.top + S(26);
+    round_fill(hdc, g_cheatBack, g_cheatBackHot ? g_t.sel : g_t.ghostHot, S(13));
+    text_at(hdc, g_cheatBack, "<- Back", hFontUI, g_t.text,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    r.left = S(20);
+    r.right = rc.right - S(20);
+    y = S(58);
+
+    r.top = y; r.bottom = rc.bottom;
+    y += text_wrapped(hdc, r, c->title, hFontTitle, g_t.text) + S(16);
+
+    r.top = y; r.bottom = y + S(16);
+    text_at(hdc, r, "WHAT IT DOES", hFontSmall, g_t.muted, DT_LEFT | DT_SINGLELINE);
+    y += S(22);
+    r.top = y; r.bottom = rc.bottom;
+    y += text_wrapped(hdc, r, c->detail, hFontBody, g_t.text) + S(22);
+
+    r.top = y; r.bottom = y + S(16);
+    text_at(hdc, r, "EXAMPLE", hFontSmall, g_t.muted, DT_LEFT | DT_SINGLELINE);
+    y += S(22);
+
+    old = SelectObject(hdc, hFontMono);
+    GetTextMetricsA(hdc, &tm);
+    SelectObject(hdc, old);
+    lineH = tm.tmHeight + S(3);
+    for (line = c->snippet; (line = strstr(line, "\r\n")) != NULL; line += 2) lines++;
+
+    box.left = r.left;
+    box.right = r.right;
+    box.top = y;
+    box.bottom = y + lines * lineH + S(24);
+    round_fill(hdc, box, g_t.bg, RADIUS_BIG);
+    round_frame(hdc, box, g_t.border, RADIUS_BIG);
+
+    /* one line of the example at a time: the \r\n between them ends each */
+    y += S(12);
+    for (line = c->snippet; *line; ) {
+        const char *end = strstr(line, "\r\n");
+        int len = end ? (int)(end - line) : (int)strlen(line);
+        HGDIOBJ was = SelectObject(hdc, hFontMono);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, g_t.text);
+        TextOutA(hdc, box.left + S(16), y, line, len);
+        SelectObject(hdc, was);
+        y += lineH;
+        line += len;
+        if (end) line += 2;
+    }
 }
 
 static void draw_cheat_item(DRAWITEMSTRUCT *di)
@@ -2476,6 +2630,7 @@ static void cheats_paint(HWND hwnd, HDC hdc)
 
     GetClientRect(hwnd, &rc);
     fill_rect(hdc, rc, g_t.surface);
+    if (g_cheatOpen) paint_cheat_page(hdc, rc);
 
     hint = rc;
     hint.left += S(14);
@@ -2483,7 +2638,8 @@ static void cheats_paint(HWND hwnd, HDC hdc)
     hint.bottom -= S(8);
     hint.top = hint.bottom - S(18);
     text_at(hdc, hint,
-            "Double-click or press Enter to put it in your code",
+            g_cheatOpen ? "Type it into your own program to try it out"
+                        : "Click a topic, then click anything in it to see how it is done",
             hFontSmall, g_t.muted, DT_LEFT | DT_SINGLELINE);
 }
 
@@ -2524,25 +2680,52 @@ static LRESULT CALLBACK CheatsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
             refresh_cheats();
             return 0;
         }
-        /* a link follows a single click; everything else wants a double */
+        /* one click opens a row. The second click of a double-click is not
+         * meant for whatever row the first one put under the pointer, so a
+         * click that comes that soon after a page has turned is let go. */
         if (LOWORD(w) == ID_CHEATLIST && HIWORD(w) == LBN_SELCHANGE &&
             GetKeyState(VK_LBUTTON) < 0) {
-            int at = (int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0);
-            g_cheatTurned = FALSE;
-            if (at >= 0 && at < g_cheatCount && !g_cheatShown[at]->snippet) {
-                insert_cheat(at);
-                g_cheatTurned = TRUE;
+            if (GetTickCount() - g_cheatTick < GetDoubleClickTime()) {
+                SendMessageA(hwndCheatList, LB_SETCURSEL, 0, 0);
+                return 0;
             }
-            return 0;
-        }
-        if (LOWORD(w) == ID_CHEATLIST && HIWORD(w) == LBN_DBLCLK) {
-            /* the first click of this double turned the page; the second is not
-             * meant for whatever row is under the pointer now */
-            if (g_cheatTurned) { g_cheatTurned = FALSE; return 0; }
-            insert_cheat((int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0));
+            open_cheat((int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0));
             return 0;
         }
         break;
+
+    case WM_MOUSEMOVE: {
+        POINT p;
+        BOOL hot;
+        TRACKMOUSEEVENT tme;
+
+        p.x = GET_X_LPARAM(l); p.y = GET_Y_LPARAM(l);
+        hot = g_cheatOpen && contains(g_cheatBack, p);
+        if (hot != g_cheatBackHot) {
+            g_cheatBackHot = hot;
+            InvalidateRect(hwnd, &g_cheatBack, FALSE);
+        }
+        tme.cbSize = sizeof(tme);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hwnd;
+        tme.dwHoverTime = 0;
+        TrackMouseEvent(&tme);
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+        if (g_cheatBackHot) { g_cheatBackHot = FALSE; InvalidateRect(hwnd, &g_cheatBack, FALSE); }
+        return 0;
+
+    case WM_LBUTTONDOWN: {
+        POINT p;
+        p.x = GET_X_LPARAM(l); p.y = GET_Y_LPARAM(l);
+        /* not the tail of the double-click that opened this page */
+        if (g_cheatOpen && contains(g_cheatBack, p) &&
+            GetTickCount() - g_cheatTick >= GetDoubleClickTime())
+            show_cheat(NULL);
+        return 0;
+    }
 
     case WM_SIZE: {
         RECT rc;
@@ -2566,6 +2749,7 @@ static LRESULT CALLBACK CheatsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
         hwndCheats = NULL;
         hwndCheatFind = NULL;
         hwndCheatList = NULL;
+        g_cheatOpen = NULL;
         return 0;
     }
     return DefWindowProcA(hwnd, msg, w, l);
@@ -2598,6 +2782,8 @@ static void open_cheats(HWND owner)
     theme_edit(hwndCheatFind);
     theme_edit(hwndCheatList);
 
+    g_cheatPage = 0;                 /* always opens on the list of topics */
+    g_cheatOpen = NULL;
     SetWindowTextA(hwndCheatFind, "");
     refresh_cheats();
 
@@ -2680,7 +2866,7 @@ static void save_as(HWND hwnd)
     ofn.lpstrFilter = "Adda programs (*.adda)\0*.adda\0All files\0*.*\0";
     ofn.lpstrFile = path;
     ofn.nMaxFile = sizeof path;
-    ofn.lpstrInitialDir = dir;
+    ofn.lpstrInitialDir = dir[0] ? dir : NULL;
     ofn.lpstrDefExt = "adda";
     ofn.lpstrTitle = "Save";
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
@@ -2714,15 +2900,16 @@ static void save_as(HWND hwnd)
 static void import_files(HWND hwnd);
 static void import_folder(HWND hwnd);
 
-/* The Open dialog cannot pick a folder, so Import asks which it is first. */
+/* The Open dialog cannot pick a folder, so Import asks which it is first: a
+ * folder opens as the project, files are added to the open project. */
 static void import_menu(HWND hwnd)
 {
     HMENU m = CreatePopupMenu();
     POINT at;
     int pick;
 
-    AppendMenuA(m, MF_STRING, 1, "Import Files...");
-    AppendMenuA(m, MF_STRING, 2, "Import Folder...");
+    AppendMenuA(m, MF_STRING, 2, "Import Folder (open it as the project)...");
+    AppendMenuA(m, MF_STRING, 1, "Import Files into this project...");
     at.x = g_barRect[BAR_IMPORT].left;
     at.y = g_barRect[BAR_IMPORT].top;
     ClientToScreen(hwnd, &at);
@@ -2733,89 +2920,86 @@ static void import_menu(HWND hwnd)
     if (pick == 2) import_folder(hwnd);
 }
 
-/* Copies a whole folder, with everything inside it, into the Explorer's
- * folder - numbered if the name is taken - then lists the programs in it and
- * opens its first.adda, or else its first program. */
-static void import_folder(HWND hwnd)
+/* Puts the open file away: saved, and out of the editor. */
+static void close_file(void)
 {
-    BROWSEINFOA bi;
-    LPITEMIDLIST picked;
-    char from[MAX_PATH + 2], dir[MAX_PATH], to[MAX_PATH * 2 + 16], inside[MAX_PATH * 2 + 20];
-    const char *leaf;
-    SHFILEOPSTRUCTA op;
+    save_current();
+    g_curPath[0] = '\0';
+    g_loading = TRUE;
+    SetWindowTextA(hwndCode, "");
+    g_loading = FALSE;
+    g_dirty = FALSE;
+    g_chkCount = 0;
+    show_current();
+}
+
+/* Makes `dir` the project: the Explorer shows it, and its first.adda - or else
+ * its first program - is opened. The folder is used where it is; nothing is
+ * copied. */
+static void open_project(HWND hwnd, const char *dir)
+{
+    size_t n = strlen(dir);
     int i, first = -1;
-    size_t n;
 
-    ZeroMemory(&bi, sizeof bi);
-    bi.hwndOwner = hwnd;
-    bi.lpszTitle = "Choose a folder to import";
-    bi.ulFlags = BIF_RETURNONLYFSDIRS;
-    picked = SHBrowseForFolderA(&bi);
-    if (!picked) return;
-    ZeroMemory(from, sizeof from);          /* SHFileOperation wants two NULs */
-    if (!SHGetPathFromIDListA(picked, from)) { CoTaskMemFree(picked); return; }
-    CoTaskMemFree(picked);
+    close_file();
+    snprintf(g_projectDir, sizeof g_projectDir, "%s%s", dir,
+             (n && dir[n - 1] == '\\') ? "" : "\\");
+    remember_project();
 
-    n = strlen(from);
-    while (n > 0 && from[n - 1] == '\\') from[--n] = '\0';
-    leaf = strrchr(from, '\\');
-    leaf = leaf ? leaf + 1 : from;
-
-    explorer_dir(dir, sizeof dir);
-    snprintf(to, sizeof to, "%s%s", dir, leaf);
-    for (i = 2; GetFileAttributesA(to) != INVALID_FILE_ATTRIBUTES; i++)
-        snprintf(to, sizeof to, "%s%s %d", dir, leaf, i);
-    to[strlen(to) + 1] = '\0';
-
-    ZeroMemory(&op, sizeof op);
-    op.hwnd = hwnd;
-    op.wFunc = FO_COPY;
-    op.pFrom = from;
-    op.pTo = to;
-    op.fFlags = FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR | FOF_NOERRORUI | FOF_SILENT;
-    if (SHFileOperationA(&op) != 0 || op.fAnyOperationsAborted) {
-        MessageBoxA(hwnd, "That folder could not be imported.\n"
-                          "It may be locked, or the folder may be read-only.",
-                    "Import", MB_OK | MB_ICONWARNING);
-        return;
-    }
-
-    /* show only what came in: the programs in the new folder */
+    g_view = AB_EXPLORER;
+    layout(hwnd);
     rescan_files();
-    g_fileCount = 0;
-    snprintf(inside, sizeof inside, "%s\\", to);
-    scan_dir(inside);
-    leaf = strrchr(to, '\\');
-    leaf = leaf ? leaf + 1 : to;
-    for (i = 0; i < g_fileCount; i++) {
-        char label[MAX_PATH * 3];
-        snprintf(label, sizeof label, "%s\\%s", leaf, g_files[i].name);
-        snprintf(g_files[i].name, sizeof g_files[i].name, "%.*s",
-                 (int)sizeof g_files[i].name - 1, label);
-        if (first < 0 || strstr(g_files[i].name, "\\first.adda")) first = i;
-    }
-    g_importOnly = TRUE;
-    SendMessageA(hwndFiles, LB_RESETCONTENT, 0, 0);
     for (i = 0; i < g_fileCount; i++)
-        SendMessageA(hwndFiles, LB_ADDSTRING, 0, (LPARAM)g_files[i].name);
-    InvalidateRect(hwndMain, &g_panelRect, FALSE);   /* the heading says IMPORTED */
+        if (first < 0 || lstrcmpiA(g_files[i].name, "first.adda") == 0) first = i;
     if (first >= 0) {
         SendMessageA(hwndFiles, LB_SETCURSEL, (WPARAM)first, 0);
         open_file(first);
     }
+    show_current();
+    InvalidateRect(hwnd, NULL, TRUE);
 }
 
+static void need_project(HWND hwnd)
+{
+    MessageBoxA(hwnd, "Open a project first.\n"
+                      "New Project makes one, and Import Folder can open one you already have.",
+                "Adda", MB_OK | MB_ICONINFORMATION);
+}
+
+/* A folder becomes the project, used where it is - importing it again just
+ * opens it again, and never makes a numbered copy. */
+static void import_folder(HWND hwnd)
+{
+    BROWSEINFOA bi;
+    LPITEMIDLIST picked;
+    char from[MAX_PATH + 2];
+
+    ZeroMemory(&bi, sizeof bi);
+    bi.hwndOwner = hwnd;
+    bi.lpszTitle = "Choose the project folder to open";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS;
+    picked = SHBrowseForFolderA(&bi);
+    if (!picked) return;
+    from[0] = '\0';
+    if (!SHGetPathFromIDListA(picked, from)) { CoTaskMemFree(picked); return; }
+    CoTaskMemFree(picked);
+    if (from[0]) open_project(hwnd, from);
+}
+
+/* Loose files are copied into the open project, a name already taken getting
+ * a number; a file that is already in the project is simply opened. */
 static void import_files(HWND hwnd)
 {
     OPENFILENAMEA ofn;
     static char list[8192];
     static char from[sizeof list + MAX_PATH];
-    char dir[MAX_PATH], to[MAX_PATH * 3], last[MAX_PATH * 3] = "";
+    static char folder[sizeof list + 2];
+    char dir[MAX_PATH + 2], to[MAX_PATH * 3], last[MAX_PATH * 3] = "";
     const char *name;
     int failed = 0, i;
     BOOL multi;
-    static char got[MAX_FILES][64];     /* names of what came in */
-    int gotCount = 0;
+
+    if (!g_projectDir[0]) { need_project(hwnd); return; }
 
     list[0] = '\0';
     ZeroMemory(&ofn, sizeof ofn);
@@ -2824,7 +3008,7 @@ static void import_files(HWND hwnd)
     ofn.lpstrFilter = "Adda programs (*.adda)\0*.adda\0All files\0*.*\0";
     ofn.lpstrFile = list;
     ofn.nMaxFile = sizeof list;
-    ofn.lpstrTitle = "Import";
+    ofn.lpstrTitle = "Import into this project";
     ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST |
                 OFN_NOCHANGEDIR;
     if (!GetOpenFileNameA(&ofn)) return;
@@ -2835,9 +3019,20 @@ static void import_files(HWND hwnd)
      * Several: the folder, then each name, each ended by a NUL and the list
      * by a second one - which shows as a NUL just before nFileOffset. */
     multi = (list[ofn.nFileOffset - 1] == '\0');
+
+    /* the folder they come from, with a trailing backslash like `dir` */
+    if (multi) snprintf(folder, sizeof folder, "%s\\", list);
+    else       snprintf(folder, sizeof folder, "%.*s", (int)ofn.nFileOffset, list);
+
     for (name = list + ofn.nFileOffset; *name; name += strlen(name) + 1) {
         char base[MAX_PATH], *dot;
         const char *ext = strrchr(name, '.');
+
+        if (lstrcmpiA(folder, dir) == 0) {           /* already in the project */
+            lstrcpynA(last, name, (int)sizeof last);
+            if (!multi) break;
+            continue;
+        }
 
         if (multi) snprintf(from, sizeof from, "%s\\%s", list, name);
         else       snprintf(from, sizeof from, "%s", list);
@@ -2852,8 +3047,6 @@ static void import_files(HWND hwnd)
         if (CopyFileA(from, to, TRUE)) {
             const char *slash = strrchr(to, '\\');
             snprintf(last, sizeof last, "%s", slash ? slash + 1 : to);
-            if (gotCount < MAX_FILES)
-                snprintf(got[gotCount++], sizeof got[0], "%s", last);
         } else {
             failed++;
         }
@@ -2861,32 +3054,13 @@ static void import_files(HWND hwnd)
     }
 
     rescan_files();
-    if (gotCount) {
-        /* show only what came in; nothing else is touched on disk */
-        int keep = 0, j;
-        for (i = 0; i < g_fileCount; i++) {
-            BOOL mine = FALSE;
-            for (j = 0; j < gotCount; j++)
-                if (strcmp(g_files[i].name, got[j]) == 0) mine = TRUE;
-            /* only the copies beside the exe - an examples\ file can share a name */
-            if (mine && strncmp(g_files[i].path, dir, strlen(dir)) == 0 &&
-                !strchr(g_files[i].path + strlen(dir), '\\'))
-                g_files[keep++] = g_files[i];
-        }
-        g_fileCount = keep;
-        g_importOnly = TRUE;
-        SendMessageA(hwndFiles, LB_RESETCONTENT, 0, 0);
-        for (i = 0; i < g_fileCount; i++)
-            SendMessageA(hwndFiles, LB_ADDSTRING, 0, (LPARAM)g_files[i].name);
-        InvalidateRect(hwndMain, &g_panelRect, FALSE);   /* the heading says IMPORTED */
-    }
     if (last[0]) {
         select_by_name(last);
         open_file((int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0));
     }
     if (failed)
         MessageBoxA(hwnd, "Some files could not be imported.\n"
-                          "They may be locked, or the folder may be read-only.",
+                          "They may be locked, or the project folder may be read-only.",
                     "Import", MB_OK | MB_ICONWARNING);
 }
 
@@ -2910,13 +3084,12 @@ static BOOL write_text(const char *path, const char *text)
 }
 
 /* Asks where to save the new project, makes a folder of that name there with
- * first.adda and style.adda in it, points the Explorer at it and opens
- * first.adda. */
+ * first.adda and style.adda in it, and opens it as the project. */
 static void new_project(HWND hwnd)
 {
     OPENFILENAMEA ofn;
     char path[MAX_PATH] = "My Project", file[MAX_PATH * 2];
-    size_t n;
+    BOOL ok;
 
     ZeroMemory(&ofn, sizeof ofn);
     ofn.lStructSize = sizeof ofn;
@@ -2940,26 +3113,15 @@ static void new_project(HWND hwnd)
         return;
     }
 
-    n = strlen(path);
-    snprintf(g_projectDir, sizeof g_projectDir, "%s%s", path,
-             (n && path[n - 1] == '\\') ? "" : "\\");
-    {
-        BOOL ok;
-        snprintf(file, sizeof file, "%sfirst.adda", g_projectDir);
-        ok = write_text(file, FIRST_ADDA);
-        snprintf(file, sizeof file, "%sstyle.adda", g_projectDir);
-        ok = write_text(file, STYLE_ADDA) && ok;
-        if (!ok)
-            MessageBoxA(hwnd, "Windows would not write the project's files.",
-                        "New Project", MB_OK | MB_ICONWARNING);
-    }
+    snprintf(file, sizeof file, "%s\\first.adda", path);
+    ok = write_text(file, FIRST_ADDA);
+    snprintf(file, sizeof file, "%s\\style.adda", path);
+    ok = write_text(file, STYLE_ADDA) && ok;
+    if (!ok)
+        MessageBoxA(hwnd, "Windows would not write the project's files.",
+                    "New Project", MB_OK | MB_ICONWARNING);
 
-    g_view = AB_EXPLORER;
-    layout(hwnd);
-    rescan_files();
-    select_by_name("first.adda");
-    open_file((int)SendMessageA(hwndFiles, LB_GETCURSEL, 0, 0));
-    InvalidateRect(hwnd, NULL, TRUE);
+    open_project(hwnd, path);
 }
 
 static int ab_hit(POINT p)
@@ -3066,9 +3228,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         rescan_files();
 
+        g_loading = TRUE;                /* the starter is not anyone's typing */
         SetWindowTextA(hwndCode,
             "[name] = ask What is your name?\r\n"
             "print Hello, [name]");
+        g_loading = FALSE;
+
+        /* carry on with the project that was open last time, if it is still there */
+        {
+            char last[MAX_PATH + 2];
+            recall_project(last, sizeof last);
+            if (last[0]) open_project(hwnd, last);
+        }
         return 0;
     }
 
@@ -3370,6 +3541,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         DeleteObject(hFontUI);
         DeleteObject(hFontUIBold);
         DeleteObject(hFontSmall);
+        DeleteObject(hFontTitle);
+        DeleteObject(hFontBody);
         PostQuitMessage(0);
         return 0;
     }
@@ -3427,18 +3600,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
     UpdateWindow(hwnd);
 
     while (GetMessageA(&msg, NULL, 0, 0)) {
-        /* Esc closes whichever popup has focus */
+        /* Esc closes whichever popup has focus - or, on a cheat sheet entry's
+         * own page, goes back to the list first */
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
             HWND top = GetAncestor(msg.hwnd, GA_ROOT);
+            if (top == hwndCheats && g_cheatOpen) {
+                show_cheat(NULL);
+                continue;
+            }
             if (top == hwndCheats || top == hwndSettings) {
                 DestroyWindow(top);
                 continue;
             }
         }
-        /* Enter in the cheat search or list inserts the selected snippet */
+        /* Enter in the cheat search or list opens the selected row */
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN &&
             (msg.hwnd == hwndCheatFind || msg.hwnd == hwndCheatList)) {
-            insert_cheat((int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0));
+            open_cheat((int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0));
             continue;
         }
         /* F2 and Delete act on the file list */

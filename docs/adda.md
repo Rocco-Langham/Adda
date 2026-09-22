@@ -443,7 +443,8 @@ Common ones:
 | Message | Usually means |
 |---|---|
 | `'x' is not defined` | A typo, or the variable is set further down |
-| `this test gave text, but a test has to be true or false` | Missing spaces: `[x]>5` should be `[x] > 5` |
+| `this test gave text, but a test has to be true or false` | The test is a value, not a comparison: `if [name]` should be `if [name] is Rocco` |
+| `I did not expect '>5' here` | Missing spaces: `[x]>5` should be `[x] > 5` |
 | `there is no item 0 - Adda counts from 1` | Lists start at 1 |
 | `this 'if' is never closed` | A missing `end` |
 | `'item' is a special word in Adda` | Use quotes to write it as text |
@@ -545,17 +546,19 @@ Down the left side:
 
 | Icon | What it does |
 |---|---|
-| Explorer | Lists the `.adda` files beside the program and in `examples/`. Click one to open it. |
+| Explorer | Shows the project you have open - its `.adda` files, and nothing else. Click a file to open it; each file keeps its own code, and what you type is saved into it when you open another file, press Run, or quit. With no project open it tells you how to get one. |
 | Search | Finds text in your code; Enter jumps to the next match. |
-| New Project | Asks where to save a new project and what to call it, then makes that folder with `first.adda` and `style.adda` in it and shows it in the Explorer. |
-| Cheat sheet | Everything in this guide as one-liners, grouped into topics. Click a topic to open its page, and **<- Back to all topics** to return. Typing in the search box on the topics page searches every topic. Double-click an entry to put its code into your program. |
+| New Project | Asks where to save a new project and what to call it, then makes that folder with `first.adda` and `style.adda` in it and opens it as the project. |
+| Cheat sheet | Everything in this guide, grouped into topics. Click a topic to open its page, then click anything in it to open a page of its own: what it does, and an example to read and type out yourself. Nothing is pasted into your program. **<- Back** returns, and typing in the search box on the topics page searches every topic. |
 | Settings | **Themes**: Follow Windows, Light, Dark, Beige, or Abyss. |
 
 Along the bottom of the Explorer, **Save** writes your code wherever you choose,
-and **Import** brings files in - single `.adda` files, or a whole folder with
-everything inside it. On Windows, Import first asks which of the two you want.
-After an import the Explorer lists just what came in, and opens its
-`first.adda` (or its first program).
+and **Import** brings things in. Import a **folder** and it becomes the project:
+it is opened where it is - nothing is copied, so importing it again just opens
+it again - and its `first.adda` (or its first program) is opened. Import
+**files** and they are copied into the project you have open. On Windows,
+Import first asks which of the two you want. The project you had open is
+remembered, and opened again the next time you start Adda.
 
 Clicking the Explorer or Search icon you are already on closes the panel again.
 Whichever theme you pick is remembered for next time.
@@ -564,8 +567,9 @@ On a Mac the window is `Adda.app` and works the same way. The keys are the
 Mac's own: **⌘R** or **⌘Return** runs, **⌘.** stops, Return answers an `ask`,
 **⌃⌘F** (or the green button) goes full screen, and Settings offers
 **Follow macOS** in place of Follow Windows. In the Explorer, Return renames a
-file and Delete moves it to the Trash. The Explorer looks in the folder
-`Adda.app` sits in and in the `examples/` folder next to it.
+file and Delete moves it to the Trash, and the **+** at the top makes a new
+file or folder in the project. To look at the examples that come with Adda,
+import the `examples` folder.
 
 ## 14. Full list of words Adda reserves
 

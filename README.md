@@ -21,7 +21,7 @@ Adda is a tree-walking interpreter written in C99, in about 2,600 lines.
 
 ## The one rule
 
-Letting text go unquoted creates a real question: in `x = 2 + 3`, is that the
+Letting text go unquoted creates a real question: in `[x] = 2 + 3`, is that the
 number `5` or the text `"2 + 3"`? Adda answers it the same way every time:
 
 > **Operators mean maths. `[name]` means the variable called name.**
@@ -161,9 +161,11 @@ opens it on either.
 └────┴────────────┴──────────────────────────────────┘
 ```
 
-Down the left is an activity bar. **Explorer** lists the `.adda` files next to
-the program and in `examples/`; click one to open it. **Search** finds text in
-your code. Clicking the icon you are already on collapses the panel.
+Down the left is an activity bar. **Explorer** shows the project you have
+open - **New Project** makes one, and **Import** opens a folder you already
+have (try `examples`) - and nothing else; click a file to open it, and each file
+keeps its own code. **Search** finds text in your code. Clicking the icon you
+are already on collapses the panel.
 
 Press **Run** (or Ctrl+Enter). Output appears in the lower box as it happens,
 and **that box is also where you type**: when your program reaches an `ask`,
@@ -173,9 +175,9 @@ already printed is fixed; only the line you are typing can be edited.
 Drag the divider between the two boxes to resize them, or double-click it to
 even them up. **F11** goes full screen.
 
-At the bottom of the bar, the **book** opens a searchable cheat sheet — type
-what you want to do and double-click an entry to drop the code into your
-program. The **cog** opens Settings, where **Themes** offers Follow Windows,
+At the bottom of the bar, the **book** opens a searchable cheat sheet — pick a
+topic, or type what you want to do, and click an entry to see what it does and
+an example to type out yourself. The **cog** opens Settings, where **Themes** offers Follow Windows,
 Light, Dark, Beige and **Abyss** (the VS Code theme, using its real colours).
 Your choice is remembered.
 

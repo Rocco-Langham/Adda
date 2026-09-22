@@ -235,7 +235,7 @@ static NSMutableData *g_inq;          /* typed input the pipe has not taken yet 
  * at a time, and an NSString path serves as the item itself - two paths that
  * read the same ARE the same row, which is what lets a plain reloadData keep
  * whichever folders are open. */
-static NSString *g_home;              /* the Explorer's root: beside the app, or a new project */
+static NSString *g_home;              /* the open project's folder - the Explorer's root - or nil */
 static NSMutableDictionary<NSString *, NSArray<NSString *> *> *g_treeCache;
 static NSString *g_renamePath;        /* non-nil while a row is being renamed */
 static BOOL      g_renameCommit;
@@ -252,7 +252,9 @@ static int    g_barHot = -1;
 
 /* ── cheat sheet filtering ───────────────────────────────────────── */
 static const Cheat *g_cheatShown[CHEAT_MAX];
-static BOOL g_cheatTurned;          /* the last click followed a link */
+static const Cheat *g_cheatOpen;     /* the entry whose own page is showing, or NULL */
+static NSRect g_cheatBack;          /* the Back button on that page */
+static BOOL   g_cheatBackHot;
 static int g_cheatCount;
 
 static void apply_theme(void);
@@ -260,7 +262,8 @@ static void layout(void);
 static void open_settings(void);
 static void open_cheats(void);
 static void refresh_cheats(void);
-static void insert_cheat(NSInteger shownIndex);
+static void open_cheat(NSInteger shownIndex);
+static void show_cheat(const Cheat *c);
 static void run_code(void);
 static void save_current(void);
 static void check_code(void);
@@ -700,8 +703,8 @@ static void warn(NSString *text)
 
 /* ═══════════════════════════════════════════════════ the child ══ */
 
-/* The folder the app sits in: that is where the Explorer looks, the way gui.c
- * looks beside adda-gui.exe. Run bare (not as Adda.app) it is the binary's. */
+/* The folder the app sits in, which is where adda is looked for when it is
+ * not inside the bundle. Run bare (not as Adda.app) it is the binary's. */
 static NSString *home_dir(void)
 {
     NSString *b = NSBundle.mainBundle.bundlePath;
@@ -1069,14 +1072,11 @@ static NSArray<NSString *> *scan_children(NSString *dir)
  * a later search, and so a reload after one small change does not lose the
  * scan of everything else that is open. invalidate_tree() clears all of it,
  * for whenever the disk might have changed under it. */
-/* Straight after an import the Explorer lists only what was imported; the
- * next full reload (rescan_files) brings everything else back. */
-static NSArray<NSString *> *g_importOnly;
-
 static NSArray<NSString *> *children_of(NSString *dir)
 {
-    if (g_importOnly && [dir isEqualToString:g_home]) return g_importOnly;
-    NSArray<NSString *> *kids = g_treeCache[dir];
+    NSArray<NSString *> *kids;
+    if (!dir) return @[];                /* no project is open */
+    kids = g_treeCache[dir];
     if (!kids) g_treeCache[dir] = kids = scan_children(dir);
     return kids;
 }
@@ -1088,7 +1088,6 @@ static void invalidate_tree(void) { [g_treeCache removeAllObjects]; }
  * reload is done. */
 static void rescan_files(void)
 {
-    g_importOnly = nil;
     invalidate_tree();
     if (!g_files) return;
     g_quiet = YES;
@@ -1118,8 +1117,24 @@ static void save_current(void)
 
 static void show_current(void)
 {
-    g_win.title = g_curPath ? [NSString stringWithFormat:@"%@ - Adda", g_curPath.lastPathComponent]
-                            : @"Adda";
+    NSString *file = g_curPath.lastPathComponent, *project = g_home.lastPathComponent;
+    g_win.title = file && project ? [NSString stringWithFormat:@"%@ - %@", file, project]
+                : file            ? [NSString stringWithFormat:@"%@ - Adda", file]
+                : project         ? [NSString stringWithFormat:@"%@ - Adda", project]
+                                  : @"Adda";
+}
+
+/* Puts the open file away: saved, and out of the editor. */
+static void close_file(void)
+{
+    save_current();
+    g_curPath = nil;
+    g_code.string = @"";
+    g_dirty = NO;
+    [g_code.undoManager removeAllActions];
+    g_codeScroll.verticalRulerView.needsDisplay = YES;
+    clear_check();
+    show_current();
 }
 
 static void open_file(NSString *path)
@@ -1177,6 +1192,7 @@ static void reveal(NSString *path)
     NSMutableArray<NSString *> *chain = [NSMutableArray array];
     NSString *dir = path.stringByDeletingLastPathComponent;
 
+    if (!g_home) return;
     while (dir.length > g_home.length && [dir hasPrefix:g_home]) {
         [chain insertObject:dir atIndex:0];
         dir = dir.stringByDeletingLastPathComponent;
@@ -1428,7 +1444,7 @@ static void save_as(void)
     panel.title = @"Save";
     panel.allowedContentTypes = adda_types();
     panel.allowsOtherFileTypes = YES;
-    panel.directoryURL = [NSURL fileURLWithPath:target_dir()];
+    if (g_home) panel.directoryURL = [NSURL fileURLWithPath:target_dir()];
     if (item && [NSFileManager.defaultManager fileExistsAtPath:item isDirectory:&isDir] && !isDir)
         panel.nameFieldStringValue = item.lastPathComponent;
     else
@@ -1452,10 +1468,96 @@ static void save_as(void)
     }];
 }
 
-/* Copies the chosen files and folders into the Explorer's folder (or the
- * folder that is selected in it), numbering any whose name is already taken.
- * A folder comes with everything inside it. Opens the last file, or for a
- * folder its first.adda, else its first program. */
+/* ═════════════════════════════════════════════════ the project ══ */
+
+/* The Explorer shows one project - a folder - and nothing else. Which one is
+ * remembered between launches. */
+static void remember_project(void)
+{
+    if (g_home) [NSUserDefaults.standardUserDefaults setObject:g_home forKey:@"Project"];
+    else        [NSUserDefaults.standardUserDefaults removeObjectForKey:@"Project"];
+}
+
+/* Makes `dir` the project: the Explorer shows it, and its first.adda - or else
+ * its first program - is opened. The folder is used where it is; nothing is
+ * copied. */
+static void open_project(NSString *dir)
+{
+    NSString *first = nil;
+    BOOL sub = NO;
+
+    close_file();
+    g_home = dir.stringByStandardizingPath;
+    remember_project();
+    g_view = AB_EXPLORER;
+    rescan_files();
+    layout();
+
+    for (NSString *kid in children_of(g_home)) {
+        if ([NSFileManager.defaultManager fileExistsAtPath:kid isDirectory:&sub] && sub) continue;
+        if (!first || [kid.lastPathComponent isEqualToString:@"first.adda"]) first = kid;
+    }
+    if (first) {
+        select_by_path(first);
+        open_file(first);
+    }
+    show_current();
+    g_main.needsDisplay = YES;
+}
+
+static void need_project(void)
+{
+    warn(@"Open a project first.\n"
+         @"New Project makes one, and Import can open a folder you already have.");
+}
+
+/* What Import does with what was chosen. A folder becomes the project, used
+ * where it is - importing it again just opens it again, and never makes a
+ * numbered copy. Loose files are copied into the open project (into the
+ * folder selected in the Explorer, if one is), a name already taken getting
+ * a number; a file that is already in there is simply opened. */
+static void import_paths(NSArray<NSString *> *paths)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSMutableArray<NSString *> *files = [NSMutableArray array];
+    NSString *folder = nil, *last = nil, *dir;
+    int failed = 0;
+
+    for (NSString *path in paths) {
+        BOOL isDir = NO;
+        if (![fm fileExistsAtPath:path isDirectory:&isDir]) continue;
+        if (!isDir) [files addObject:path];
+        else if (!folder) folder = path;
+    }
+
+    if (folder) open_project(folder);
+    if (!files.count) return;
+    if (!g_home) { need_project(); return; }
+
+    dir = target_dir();
+    for (NSString *from in files) {
+        NSString *name = from.lastPathComponent, *to;
+        if ([from.stringByDeletingLastPathComponent.stringByStandardizingPath
+                isEqualToString:dir.stringByStandardizingPath]) {
+            last = from;                     /* already here */
+            continue;
+        }
+        to = unique_path(dir, name.stringByDeletingPathExtension, name.pathExtension);
+        if ([fm copyItemAtPath:from toPath:to error:NULL]) last = to;
+        else failed++;
+    }
+
+    rescan_files();
+    if (last) {
+        reveal(last);
+        select_by_path(last);
+        open_file(last);
+    }
+    if (failed)
+        warn(@"Some files could not be imported.\n"
+             @"They may be locked, or the project folder may be read-only.");
+}
+
 static void import_files(void)
 {
     NSOpenPanel *panel = [NSOpenPanel openPanel];
@@ -1463,61 +1565,51 @@ static void import_files(void)
     panel.title = @"Import";
     panel.prompt = @"Import";
     panel.canChooseFiles = YES;
-    panel.canChooseDirectories = YES;       /* a whole folder, too */
+    panel.canChooseDirectories = YES;       /* a folder opens as the project */
     panel.allowsMultipleSelection = YES;
     panel.allowedContentTypes = adda_types();
-    panel.message = @"Choose .adda files, or a whole folder.";
+    panel.message = @"Choose a project folder to open, or .adda files to add to this project.";
 
     [panel beginSheetModalForWindow:g_win completionHandler:^(NSModalResponse r) {
-        NSString *dir = target_dir(), *last = nil, *lastDir = nil;
-        NSMutableArray<NSString *> *got = [NSMutableArray array];
-        int failed = 0;
-
+        NSMutableArray<NSString *> *paths = [NSMutableArray array];
         if (r != NSModalResponseOK) return;
-        for (NSURL *url in panel.URLs) {
-            NSString *name = url.lastPathComponent;
-            NSString *to = unique_path(dir, name.stringByDeletingPathExtension, name.pathExtension);
-            BOOL isDir = NO;
-            [NSFileManager.defaultManager fileExistsAtPath:url.path isDirectory:&isDir];
-            if ([NSFileManager.defaultManager copyItemAtPath:url.path toPath:to error:NULL]) {
-                if (isDir) lastDir = to; else last = to;
-                [got addObject:to];
-            }
-            else
-                failed++;
-        }
-        rescan_files();
-        if (got.count) {
-            /* show only what came in; nothing else is touched on disk */
-            g_importOnly = [got copy];
-            [g_files reloadItem:nil reloadChildren:YES];
-            g_main.needsDisplay = YES;          /* the heading says IMPORTED */
-        }
-        if (!last && lastDir) {
-            /* a folder: open it up, and open its first.adda or first program */
-            BOOL sub = NO;
-            [g_files expandItem:lastDir];
-            for (NSString *kid in children_of(lastDir)) {
-                if ([NSFileManager.defaultManager fileExistsAtPath:kid isDirectory:&sub] && sub)
-                    continue;
-                if (!last || [kid.lastPathComponent isEqualToString:@"first.adda"]) last = kid;
-            }
-        }
-        if (last) {
-            select_by_path(last);
-            open_file(last);
-        }
-        if (failed)
-            warn(@"Some files or folders could not be imported.\n"
-                 @"They may be locked, or the folder may be read-only.");
+        for (NSURL *url in panel.URLs) [paths addObject:url.path];
+        import_paths(paths);
     }];
 }
 
 /* ═══════════════════════════════════════════════════ new project ══ */
 
-/* Asks where to save the new project, makes a folder of that name there with
- * first.adda and style.adda in it, points the Explorer at it and opens
- * first.adda. */
+/* Makes the folder `dir` with first.adda and style.adda in it, and opens it
+ * as the project. */
+static void make_project(NSString *dir)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    BOOL ok;
+
+    if ([fm fileExistsAtPath:dir]) {
+        warn(@"There is already something with that name there.\n"
+             @"Pick another name for the project.");
+        return;
+    }
+    if (![fm createDirectoryAtPath:dir withIntermediateDirectories:NO attributes:nil error:NULL]) {
+        warn(@"The Mac would not create the project folder there.");
+        return;
+    }
+    ok = [@"# first.adda - your program starts here.\n"
+          @"[name] = ask What is your name?\n"
+          @"print Hello, [name]\n"
+            writeToFile:[dir stringByAppendingPathComponent:@"first.adda"]
+             atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    ok = [@"# style.adda - a second file for this project.\n"
+            writeToFile:[dir stringByAppendingPathComponent:@"style.adda"]
+             atomically:YES encoding:NSUTF8StringEncoding error:NULL] && ok;
+    if (!ok) warn(@"The Mac would not write the project's files.");
+
+    open_project(dir);
+}
+
+/* Asks where to save the new project and what to call it. */
 static void new_project(void)
 {
     NSSavePanel *panel = [NSSavePanel savePanel];
@@ -1530,38 +1622,7 @@ static void new_project(void)
     panel.canCreateDirectories = YES;
 
     [panel beginSheetModalForWindow:g_win completionHandler:^(NSModalResponse r) {
-        NSFileManager *fm = NSFileManager.defaultManager;
-        NSString *dir = panel.URL.path, *first, *style;
-        BOOL ok;
-
-        if (r != NSModalResponseOK) return;
-        if ([fm fileExistsAtPath:dir]) {
-            warn(@"There is already something with that name there.\n"
-                 @"Pick another name for the project.");
-            return;
-        }
-        if (![fm createDirectoryAtPath:dir withIntermediateDirectories:NO
-                            attributes:nil error:NULL]) {
-            warn(@"The Mac would not create the project folder there.");
-            return;
-        }
-        first = [dir stringByAppendingPathComponent:@"first.adda"];
-        style = [dir stringByAppendingPathComponent:@"style.adda"];
-        ok = [@"# first.adda - your program starts here.\n"
-              @"[name] = ask What is your name?\n"
-              @"print Hello, [name]\n"
-                writeToFile:first atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-        ok = [@"# style.adda - a second file for this project.\n"
-                writeToFile:style atomically:YES encoding:NSUTF8StringEncoding error:NULL] && ok;
-        if (!ok) warn(@"The Mac would not write the project's files.");
-
-        g_home = dir;
-        g_view = AB_EXPLORER;
-        rescan_files();
-        layout();
-        select_by_path(first);
-        open_file(first);
-        g_win.title = [NSString stringWithFormat:@"Adda - %@", dir.lastPathComponent];
+        if (r == NSModalResponseOK) make_project(panel.URL.path);
     }];
 }
 
@@ -1648,7 +1709,7 @@ static void layout(void)
 
     if (g_view == AB_EXPLORER) {
         g_filesScroll.frame = sized(abW + 8, 40, panelW - 16, H - 48 - 40);
-        g_filesScroll.hidden = NO;
+        g_filesScroll.hidden = (g_home == nil);     /* paint_main says why it is empty */
         g_find.hidden = YES;
         g_addRect = NSMakeRect(NSMaxX(g_panelRect) - 14 - 20, 8, 20, 20);
         for (i = 0; i < BAR_COUNT; i++)
@@ -1734,8 +1795,18 @@ static void paint_main(void)
         fill_rect(g_panelRect, g_t.bg);
 
         text_at(NSMakeRect(NSMinX(g_panelRect) + 14, 12, labelRight - (NSMinX(g_panelRect) + 14), 20),
-                (g_view == AB_SEARCH) ? @"SEARCH" : g_importOnly ? @"IMPORTED" : @"EXPLORER",
+                (g_view == AB_SEARCH) ? @"SEARCH"
+                    : g_home ? g_home.lastPathComponent.uppercaseString : @"EXPLORER",
                 g_fontSmall, g_t.muted, T_LEFT);
+
+        if (g_view == AB_EXPLORER && !g_home) {
+            /* nothing to list: say how to get a project */
+            CGFloat x = NSMinX(g_panelRect) + 14, w = NSWidth(g_panelRect) - 28;
+            text_at(NSMakeRect(x, 48, w, 18), @"No project open", g_fontUIBold, g_t.text, T_LEFT);
+            text_at(NSMakeRect(x, 72, w, 16), @"New Project makes one.", g_fontSmall, g_t.muted, T_LEFT);
+            text_at(NSMakeRect(x, 90, w, 16), @"Import opens a folder", g_fontSmall, g_t.muted, T_LEFT);
+            text_at(NSMakeRect(x, 106, w, 16), @"you already have.", g_fontSmall, g_t.muted, T_LEFT);
+        }
 
         if (g_view == AB_EXPLORER) {
             unsigned addFg = blend(g_t.muted, g_t.text, g_addGlow);
@@ -1928,35 +1999,34 @@ static void refresh_cheats(void)
     }
 }
 
-static void insert_cheat(NSInteger shownIndex)
+/* Shows an entry's own page - what it does, and an example to read and type
+ * out - or, given NULL, goes back to the list. Nothing is ever pasted into the
+ * program: the cheat sheet explains, and the typing is left to the reader. */
+static void show_cheat(const Cheat *c)
 {
-    NSString *snip;
-    NSRange r;
+    g_cheatOpen = c;
+    g_cheatBackHot = NO;
+    g_cheatFind.hidden = (c != NULL);
+    g_cheatList.enclosingScrollView.hidden = (c != NULL);
+    g_cheatsView.needsDisplay = YES;
+    [g_cheats makeFirstResponder:c ? (NSResponder *)g_cheatsView : (NSResponder *)g_cheatFind];
+}
+
+/* A click on a row: a topic (or the way back) turns the page, anything else
+ * opens its own page. */
+static void open_cheat(NSInteger shownIndex)
+{
+    const Cheat *c;
 
     if (shownIndex < 0 || shownIndex >= g_cheatCount) return;
-    if (!g_cheatShown[shownIndex]->snippet) {   /* a link: turn the page */
-        g_cheatPage = g_cheatShown[shownIndex]->page;
+    c = g_cheatShown[shownIndex];
+    if (!c->snippet) {                          /* a link: turn the page */
+        g_cheatPage = c->page;
         if (g_cheatFind) g_cheatFind.stringValue = @"";   /* a new page starts unfiltered */
         refresh_cheats();
         return;
     }
-
-    /* the snippets carry \r\n for the Windows EDIT control */
-    snip = [@(g_cheatShown[shownIndex]->snippet)
-               stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"];
-
-    /* through shouldChange/didChange, so Cmd+Z can take it back out */
-    r = g_code.selectedRange;
-    if ([g_code shouldChangeTextInRange:r replacementString:snip]) {
-        [g_code.textStorage replaceCharactersInRange:r withAttributedString:
-            [[NSAttributedString alloc] initWithString:snip attributes:g_code.typingAttributes]];
-        [g_code didChangeText];
-        g_code.selectedRange = NSMakeRange(r.location + snip.length, 0);
-        [g_code scrollRangeToVisible:g_code.selectedRange];
-    }
-
-    [g_win makeKeyAndOrderFront:nil];
-    [g_win makeFirstResponder:g_code];
+    show_cheat(c);
 }
 
 static NSTableView *make_table(Class cls, CGFloat rowH)
@@ -2011,8 +2081,10 @@ static void open_cheats(void)
 
         g_cheatList = (CheatTable *)make_table([CheatTable class], 43);
         g_cheatList.target = g_adda;
-        g_cheatList.doubleAction = @selector(insertClickedCheat:);
-        g_cheatList.action = @selector(followCheatLink:);   /* a link: one click */
+        g_cheatList.action = @selector(openClickedCheat:);  /* one click opens a row */
+        /* the second click of a double-click goes here rather than to `action`
+         * again, where it would open whatever the first click had put under it */
+        g_cheatList.doubleAction = @selector(ignoreCheatDoubleClick:);
 
         sv = scroll_round(g_cheatList);
         sv.frame = NSMakeRect(14, 50, NSWidth(frame) - 28, NSHeight(frame) - 50 - 32);
@@ -2024,7 +2096,9 @@ static void open_cheats(void)
     }
 
     if (!g_cheats.visible) {
+        g_cheatPage = 0;                 /* always opens on the list of topics */
         g_cheatFind.stringValue = @"";
+        show_cheat(NULL);
         refresh_cheats();
         centre_on(g_cheats);
     }
@@ -2221,8 +2295,12 @@ static void add(NSMenu *m, NSString *title, SEL action, NSString *key,
 static void show_add_menu(NSPoint p)
 {
     NSMenu *m = [NSMenu new];
-    add(m, @"New File", @selector(newFile:), @"", 0, g_adda);
-    add(m, @"New Folder", @selector(newFolder:), @"", 0, g_adda);
+    if (g_home) {
+        add(m, @"New File", @selector(newFile:), @"", 0, g_adda);
+        add(m, @"New Folder", @selector(newFolder:), @"", 0, g_adda);
+    } else {                              /* files need a project to live in */
+        add(m, @"New Project...", @selector(newProject:), @"", 0, g_adda);
+    }
     [m popUpMenuPositioningItem:nil atLocation:p inView:g_main];
 }
 
@@ -2448,7 +2526,7 @@ static void build_menu(void)
 - (void)keyDown:(NSEvent *)e
 {
     if (e.keyCode == KEY_RETURN || e.keyCode == KEY_ENTER) {
-        insert_cheat(self.selectedRow);
+        open_cheat(self.selectedRow);
         return;
     }
     [super keyDown:e];
@@ -2548,23 +2626,121 @@ static void build_menu(void)
 
 - (BOOL)isFlipped { return YES; }
 
+- (BOOL)acceptsFirstResponder { return YES; }
+
+/* wrapped text; returns the height it took */
+static CGFloat text_wrapped(NSRect r, NSString *s, NSFont *font, unsigned colour)
+{
+    NSMutableParagraphStyle *para = [NSMutableParagraphStyle new];
+    NSDictionary *attrs;
+    CGFloat h;
+
+    para.lineBreakMode = NSLineBreakByWordWrapping;
+    para.lineSpacing = 3;
+    attrs = @{ NSFontAttributeName: font,
+               NSForegroundColorAttributeName: col(colour),
+               NSParagraphStyleAttributeName: para };
+    h = ceil(NSHeight([s boundingRectWithSize:NSMakeSize(NSWidth(r), CGFLOAT_MAX)
+                                      options:NSStringDrawingUsesLineFragmentOrigin
+                                   attributes:attrs]));
+    [s drawWithRect:NSMakeRect(NSMinX(r), NSMinY(r), NSWidth(r), h)
+            options:NSStringDrawingUsesLineFragmentOrigin attributes:attrs];
+    return h;
+}
+
 - (void)drawRect:(NSRect)dirty
 {
     NSRect rc = self.bounds;
+    CGFloat x = 20, w = NSWidth(rc) - 40, y, lineH;
+    NSArray<NSString *> *lines;
+    NSUInteger i;
 
     (void)dirty;
     fill_rect(rc, g_t.surface);
+
+    if (!g_cheatOpen) {
+        text_at(NSMakeRect(14, NSHeight(rc) - 8 - 18, NSWidth(rc) - 28, 18),
+                @"Click a topic, then click anything in it to see how it is done",
+                g_fontSmall, g_t.muted, T_LEFT);
+        return;
+    }
+
+    /* an entry's own page: the way back, what it does, and an example */
+    g_cheatBack = NSMakeRect(14, 14, 74, 26);
+    round_fill(g_cheatBack, g_cheatBackHot ? g_t.sel : g_t.ghostHot, 13);
+    text_at(NSMakeRect(NSMinX(g_cheatBack) + 13, NSMinY(g_cheatBack), NSWidth(g_cheatBack) - 13, 26),
+            @"<- Back", g_fontUI, g_t.text, T_VCENTER);
+
+    y = 58;
+    y += text_wrapped(NSMakeRect(x, y, w, 0), @(g_cheatOpen->title),
+                      [NSFont systemFontOfSize:19 weight:NSFontWeightSemibold], g_t.text) + 18;
+
+    text_at(NSMakeRect(x, y, w, 16), @"WHAT IT DOES", g_fontSmall, g_t.muted, T_LEFT);
+    y += 22;
+    y += text_wrapped(NSMakeRect(x, y, w, 0), @(g_cheatOpen->detail),
+                      [NSFont systemFontOfSize:14], g_t.text) + 24;
+
+    text_at(NSMakeRect(x, y, w, 16), @"EXAMPLE", g_fontSmall, g_t.muted, T_LEFT);
+    y += 22;
+    lines = [@(g_cheatOpen->snippet) componentsSeparatedByString:@"\r\n"];
+    lineH = ceil(g_fontMono.ascender - g_fontMono.descender + g_fontMono.leading) + 4;
+    {
+        NSRect box = NSMakeRect(x, y, w, lines.count * lineH + 24);
+        round_fill(box, g_t.bg, RADIUS_BIG);
+        round_frame(box, g_t.border, RADIUS_BIG);
+    }
+    for (i = 0; i < lines.count; i++)
+        text_at(NSMakeRect(x + 16, y + 12 + i * lineH, w - 32, lineH), lines[i],
+                g_fontMono, g_t.text, T_LEFT);
+
     text_at(NSMakeRect(14, NSHeight(rc) - 8 - 18, NSWidth(rc) - 28, 18),
-            @"Double-click or press Return to put it in your code",
+            @"Type it into your own program to try it out",
             g_fontSmall, g_t.muted, T_LEFT);
+}
+
+- (void)updateTrackingAreas
+{
+    for (NSTrackingArea *t in self.trackingAreas.copy) [self removeTrackingArea:t];
+    [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect
+        options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+                NSTrackingActiveAlways | NSTrackingInVisibleRect
+          owner:self userInfo:nil]];
+    [super updateTrackingAreas];
+}
+
+- (void)mouseMoved:(NSEvent *)e
+{
+    BOOL hot = g_cheatOpen &&
+               NSPointInRect([self convertPoint:e.locationInWindow fromView:nil], g_cheatBack);
+    if (hot != g_cheatBackHot) { g_cheatBackHot = hot; self.needsDisplay = YES; }
+}
+
+- (void)mouseExited:(NSEvent *)e
+{
+    (void)e;
+    if (g_cheatBackHot) { g_cheatBackHot = NO; self.needsDisplay = YES; }
+}
+
+- (void)mouseDown:(NSEvent *)e
+{
+    /* not the tail of the double-click that opened this page */
+    if (g_cheatOpen && e.clickCount == 1 &&
+        NSPointInRect([self convertPoint:e.locationInWindow fromView:nil], g_cheatBack))
+        show_cheat(NULL);
 }
 
 @end
 
 @implementation Popup
 
-/* Esc closes whichever popup has focus */
-- (void)cancelOperation:(id)sender { (void)sender; [self close]; }
+/* Esc closes whichever popup has focus - or, on a cheat sheet entry's own
+ * page, goes back to the list first */
+- (void)cancelOperation:(id)sender
+{
+    (void)sender;
+    if (self == g_cheats && g_cheatOpen) { show_cheat(NULL); return; }
+    [self close];
+}
 
 @end
 
@@ -2923,14 +3099,20 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     g_carry = [NSMutableData data];
     g_inq = [NSMutableData data];
     g_treeCache = [NSMutableDictionary dictionary];
-    g_home = home_dir();
-
     load_pick();
     build_fonts();
     g_t = theme_for(g_pick);
     build_menu();
     build_window();
     rescan_files();
+
+    /* carry on with the project that was open last time, if it is still there */
+    {
+        NSString *last = [NSUserDefaults.standardUserDefaults stringForKey:@"Project"];
+        BOOL isDir = NO;
+        if (last && [NSFileManager.defaultManager fileExistsAtPath:last isDirectory:&isDir] && isDir)
+            open_project(last);
+    }
 
     /* Follow macOS has to notice when macOS changes */
     [NSApp addObserver:self forKeyPath:@"effectiveAppearance" options:0 context:NULL];
@@ -3006,25 +3188,13 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     [g_win makeFirstResponder:g_find];
 }
 
-- (void)insertClickedCheat:(id)sender
+- (void)openClickedCheat:(id)sender
 {
     (void)sender;
-    /* the first click of this double turned the page; the second is not meant
-     * for whatever row is under the pointer now */
-    if (g_cheatTurned) { g_cheatTurned = NO; return; }
-    insert_cheat(g_cheatList.clickedRow);
+    open_cheat(g_cheatList.clickedRow);
 }
 
-- (void)followCheatLink:(id)sender
-{
-    NSInteger row = g_cheatList.clickedRow;
-    (void)sender;
-    g_cheatTurned = NO;
-    if (row >= 0 && row < g_cheatCount && !g_cheatShown[row]->snippet) {
-        insert_cheat(row);
-        g_cheatTurned = YES;
-    }
-}
+- (void)ignoreCheatDoubleClick:(id)sender { (void)sender; }
 
 /* acts on the right-clicked row, which the Mac rings but does not select */
 - (void)renameFile:(id)sender
@@ -3042,9 +3212,12 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
 /* The + button in the Explorer, and the matching File menu items. Either
  * makes a placeholder with a name nobody chose, inside the selected folder
  * (or the root, nothing being selected), and starts renaming it at once. */
+- (void)newProject:(id)sender { (void)sender; new_project(); }
+
 - (void)newFile:(id)sender
 {
     (void)sender;
+    if (!g_home) { need_project(); return; }
     if (g_view != AB_EXPLORER) ab_click(AB_EXPLORER);
     create_and_edit(unique_path(target_dir(), @"untitled", @"adda"), NO);
 }
@@ -3052,6 +3225,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
 - (void)newFolder:(id)sender
 {
     (void)sender;
+    if (!g_home) { need_project(); return; }
     if (g_view != AB_EXPLORER) ab_click(AB_EXPLORER);
     create_and_edit(unique_path(target_dir(), @"New Folder", @""), YES);
 }
@@ -3132,7 +3306,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     if (c == g_cheatFind) {
         NSInteger row = g_cheatList.selectedRow;
 
-        if (cmd == @selector(insertNewline:)) { insert_cheat(row); return YES; }
+        if (cmd == @selector(insertNewline:)) { open_cheat(row); return YES; }
         if (cmd == @selector(cancelOperation:)) { [g_cheats close]; return YES; }
         /* the arrows walk the list without leaving the search box */
         if (cmd == @selector(moveDown:) || cmd == @selector(moveUp:)) {
@@ -3250,7 +3424,10 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
 /* A click or an arrow key on a file opens it; one on a folder just selects
  * it. Selections made in code - after a rename, a delete or a new item -
  * leave the editor alone. */
-- (void)tableViewSelectionDidChange:(NSNotification *)n
+/* The Explorer is an outline view, and an outline view tells its delegate
+ * through this method - never through tableViewSelectionDidChange:, which is
+ * why clicking a file used to leave the editor showing the old one. */
+- (void)outlineViewSelectionDidChange:(NSNotification *)n
 {
     NSInteger row;
     NSString *item;

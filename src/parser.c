@@ -481,7 +481,7 @@ static Node *primary(E *e)
                           "To use it as plain text, put it in quotes.");
         key.p = p; key.i = e->i; key.end = (uint32_t)of;
         if (key.i >= key.end)
-            adda_error_at(t->start, line, "has needs a key, as in: has name of person");
+            adda_error_at(t->start, line, "has needs a key, as in: has name of [person]");
         n->a = expr(&key);
         e->i = (uint32_t)of + 1;
         n->b = primary(e);
@@ -499,10 +499,10 @@ static Node *primary(E *e)
         e->i++;
         of = find_top(p, e->i, e->end, TK_EOF, "of");
         if (of < 0)
-            adda_error_at(t->start, line, "'item' is a special word in Adda: write 'item 1 of nums'. To use it as plain text, put it in quotes.");
+            adda_error_at(t->start, line, "'item' is a special word in Adda: write 'item 1 of [nums]'. To use it as plain text, put it in quotes.");
         idx.p = p; idx.i = e->i; idx.end = (uint32_t)of;
         if (idx.i >= idx.end)
-            adda_error_at(t->start, line, "item needs a position, as in: item 1 of nums");
+            adda_error_at(t->start, line, "item needs a position, as in: item 1 of [nums]");
         n->a = expr(&idx);
         e->i = (uint32_t)of + 1;
         n->b = primary(e);
@@ -694,7 +694,7 @@ static Node *parse_condition(P *p, uint32_t from, uint32_t to, const char *what)
 
     if (to <= from)
         adda_error_at(at(p, from)->start, at(p, from)->line,
-                      "%s needs something to test, as in: %s score > 10", what, what);
+                      "%s needs something to test, as in: %s [score] > 10", what, what);
     p->in_condition++;
     n = parse_value(p, from, to);
     p->in_condition--;
@@ -994,7 +994,7 @@ static Node *parse_remove(P *p, uint32_t s, uint32_t e)
     n->a = parse_value(p, s + 1, e);
     if (n->a->kind != N_INDEX && n->a->kind != N_FIELD)
         adda_error_at(p->t[s].start, line,
-                      "remove needs an item or a key, as in: remove item 1 of nums");
+                      "remove needs an item or a key, as in: remove item 1 of [nums]");
     end_line(p, e);
     return n;
 }
