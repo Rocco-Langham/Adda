@@ -39,6 +39,7 @@ static AddaCanvas *g_canvas;
 static AddaWatcher *g_watcher;
 static bool        g_closed;
 static bool        g_entered;      /* Enter was pressed in the input box */
+static NSColor    *g_bg;           /* openApplication details: colour ...; nil: the usual */
 
 /* A font by name, in any capitals - "helvetica" finds Helvetica - or the
  * usual one when there is no such font. */
@@ -131,7 +132,7 @@ static void place_field(AddaShape *sh, NSRect bounds)
     NSSize size;
 
     (void)dirty;
-    [NSColor.windowBackgroundColor setFill];
+    [(g_bg ? g_bg : NSColor.windowBackgroundColor) setFill];
     NSRectFill(self.bounds);
 
     /* shapes first, so the text sits on top of them */
@@ -274,6 +275,22 @@ bool adda_open_window(const char *title)
 }
 
 bool adda_window_is_open(void) { return g_window != nil; }
+
+void adda_window_background(unsigned rgb)
+{
+    double r = ((rgb >> 16) & 0xff) / 255.0, g = ((rgb >> 8) & 0xff) / 255.0, b = (rgb & 0xff) / 255.0;
+
+    if (!g_window) return;
+    g_bg = [NSColor colorWithSRGBRed:r green:g blue:b alpha:1];
+    /* text and shapes are drawn in the label colour: dark on a light
+     * background, light on a dark one */
+    g_window.appearance = [NSAppearance appearanceNamed:
+        0.2126 * r + 0.7152 * g + 0.0722 * b > 0.55 ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
+    g_window.backgroundColor = g_bg;
+    g_canvas.needsDisplay = YES;
+    [g_canvas displayIfNeeded];
+    pump([NSDate date]);
+}
 
 void adda_window_print(const char *text, size_t len)
 {

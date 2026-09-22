@@ -21,3 +21,4 @@ const char *adda_window_input(const char *name, const char *hint, const char *qu
     (void)name; (void)hint; (void)question;
     return NULL;
 }
+void adda_window_background(unsigned rgb) { (void)rgb; }

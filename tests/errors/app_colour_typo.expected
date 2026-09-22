@@ -1,0 +1,4 @@
+tests/errors/app_colour_typo.adda:2: Adda does not know the colour 'yelow' - did you mean 'yellow'?
+     2 |     colour yelow
+       |            ^
+exit: 65

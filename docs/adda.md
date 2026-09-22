@@ -309,6 +309,27 @@ responding. When the program reaches its end the window stays up until you
 close it; closing it earlier stops the program, as closing an app does.
 Questions from `ask` still appear in the console.
 
+#### The window's colour
+
+`openApplication details` opens the window with settings, one per line,
+closed with `end`:
+
+```adda
+openApplication details
+    colour yellow
+    title My Game
+end
+print Hello
+```
+
+`colour` (or `color`) is the background: yellow, red, orange, green, blue,
+purple, pink, brown, black, white, grey, light grey, dark grey, light blue,
+dark blue, navy, light green, dark green, teal, cyan, gold, silver, beige,
+cream or lime - or any colour written as `#FFCC00`. Text, shapes and input
+boxes turn dark or light so they stay easy to read on it. `title` is the
+words at the top of the window. In the tidy view it shows the way a delay
+does: `openApplication ——> details`, then `└─>` in front of each setting.
+
 #### Shapes
 
 `insert` draws a shape in the window, behind the text. The lines straight

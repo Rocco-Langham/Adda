@@ -30,6 +30,19 @@ static int     g_inputCount;
 static HFONT   g_inputFont;
 static WNDPROC g_editProc;       /* the edit box's own window procedure */
 static bool    g_entered;        /* Enter was pressed in the input box */
+static bool     g_hasBg;         /* openApplication details: colour ... */
+static COLORREF g_bg;
+static HBRUSH   g_bgBrush;
+
+/* The window's background and the colour for text on it: black or white on
+ * a colour of your own, whichever is easier to read. */
+static COLORREF win_bg(void) { return g_hasBg ? g_bg : GetSysColor(COLOR_WINDOW); }
+static COLORREF win_fg(void)
+{
+    if (!g_hasBg) return GetSysColor(COLOR_WINDOWTEXT);
+    return 0.2126 * GetRValue(g_bg) + 0.7152 * GetGValue(g_bg) + 0.0722 * GetBValue(g_bg) > 140
+         ? RGB(0x1A, 0x1A, 0x1A) : RGB(0xF2, 0xF2, 0xF2);
+}
 
 /* Where shape i sits in a w x h window. */
 static RECT shape_box(int i, int w, int h)
@@ -100,7 +113,7 @@ static void draw_texts(HDC dc, int shape, int x, int y, int w, int ht)
     int dpi = GetDeviceCaps(dc, LOGPIXELSY);
 
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+    SetTextColor(dc, win_fg());
     for (i = 0; i < g_textCount; i++) {
         const ShapeText *t = &g_texts[i];
         int h = t->location % 3, v = t->location / 3, th;
@@ -153,11 +166,12 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
         HGDIOBJ old;
 
         GetClientRect(h, &rc);
-        FillRect(dc, &rc, (HBRUSH)(COLOR_WINDOW + 1));
+        if (g_hasBg) FillRect(dc, &rc, g_bgBrush);
+        else FillRect(dc, &rc, (HBRUSH)(COLOR_WINDOW + 1));
 
         /* shapes first, so the text sits on top of them */
         if (g_shapeCount) {
-            COLORREF bg = GetSysColor(COLOR_WINDOW), fg = GetSysColor(COLOR_WINDOWTEXT);
+            COLORREF bg = win_bg(), fg = win_fg();
             HBRUSH fill = CreateSolidBrush(mix(bg, fg, 10));
             HPEN edge = CreatePen(PS_SOLID, 1, mix(bg, fg, 30));
             HGDIOBJ ob = SelectObject(dc, fill), op = SelectObject(dc, edge);
@@ -225,7 +239,7 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
         if (g_len) {
             old = SelectObject(dc, g_font);
             SetBkMode(dc, TRANSPARENT);
-            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+            SetTextColor(dc, win_fg());
             /* measure the whole block, then put its middle on the window's middle */
             box = rc;
             InflateRect(&box, -20, 0);
@@ -239,6 +253,14 @@ static LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
         EndPaint(h, &ps);
         return 0;
     }
+    case WM_CTLCOLOREDIT:           /* an input box: the window's own colours */
+    case WM_CTLCOLORSTATIC:
+        if (g_hasBg) {
+            SetTextColor((HDC)w, win_fg());
+            SetBkColor((HDC)w, g_bg);
+            return (LRESULT)g_bgBrush;
+        }
+        break;
     case WM_SIZE:
         if (g_inputCount) place_inputs();
         InvalidateRect(h, NULL, FALSE);
@@ -293,6 +315,18 @@ bool adda_open_window(const char *title)
 }
 
 bool adda_window_is_open(void) { return g_window != NULL; }
+
+void adda_window_background(unsigned rgb)
+{
+    if (!g_window) return;
+    g_bg = RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
+    g_hasBg = true;
+    if (g_bgBrush) DeleteObject(g_bgBrush);
+    g_bgBrush = CreateSolidBrush(g_bg);
+    InvalidateRect(g_window, NULL, TRUE);
+    UpdateWindow(g_window);
+    pump();
+}
 
 void adda_window_print(const char *text, size_t len)
 {

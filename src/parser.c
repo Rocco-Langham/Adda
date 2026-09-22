@@ -922,6 +922,102 @@ static Node *parse_shape_text(P *p)
     return n;
 }
 
+/* The colours a window can be, by name. */
+static const struct { const char *name; unsigned rgb; } COLOURS[] = {
+    { "yellow", 0xFFE45C }, { "red", 0xE74C3C }, { "orange", 0xF39C12 },
+    { "green", 0x2ECC71 }, { "blue", 0x3498DB }, { "purple", 0x9B59B6 },
+    { "pink", 0xFF8FB1 }, { "brown", 0x8D6E63 }, { "black", 0x000000 },
+    { "white", 0xFFFFFF }, { "grey", 0x9E9E9E }, { "gray", 0x9E9E9E },
+    { "light grey", 0xD9D9D9 }, { "light gray", 0xD9D9D9 },
+    { "dark grey", 0x424242 }, { "dark gray", 0x424242 },
+    { "light blue", 0xAEDFF7 }, { "dark blue", 0x1F3A93 }, { "navy", 0x1B2A49 },
+    { "light green", 0xB7E4C7 }, { "dark green", 0x1E6B3A }, { "teal", 0x1ABC9C },
+    { "cyan", 0x00BCD4 }, { "gold", 0xFFC107 }, { "silver", 0xC0C0C0 },
+    { "beige", 0xF5F0E1 }, { "cream", 0xFFF8E1 }, { "lime", 0xC6FF00 },
+};
+
+/* A colour by name, in any capitals, or as #RRGGBB. -1: not one. */
+static long colour_named(const char *from, size_t len, const char **nearest)
+{
+    size_t k, i;
+    uint32_t best = 3;
+
+    *nearest = NULL;
+    if (len == 7 && from[0] == '#') {
+        unsigned long v = 0;
+        for (i = 1; i < 7; i++) {
+            int c = tolower((unsigned char)from[i]);
+            if (!isxdigit(c)) return -1;
+            v = v * 16 + (unsigned long)(isdigit(c) ? c - '0' : c - 'a' + 10);
+        }
+        return (long)v;
+    }
+    for (k = 0; k < sizeof COLOURS / sizeof COLOURS[0]; k++) {
+        char low[32];
+        size_t n = strlen(COLOURS[k].name);
+        uint32_t d;
+        if (same_ci(from, len, COLOURS[k].name)) return (long)COLOURS[k].rgb;
+        if (len >= sizeof low) continue;
+        for (i = 0; i < len; i++) low[i] = (char)tolower((unsigned char)from[i]);
+        d = adda_edit_distance(low, (uint32_t)len, COLOURS[k].name, (uint32_t)n);
+        if (d < best) { best = d; *nearest = COLOURS[k].name; }
+    }
+    return -1;
+}
+
+/* openApplication details
+ *     colour yellow
+ *     title My Game
+ * end */
+static Node *parse_app_details(P *p)
+{
+    uint32_t s = p->i, line = p->t[s].line;
+    Node *n = node(N_OPENAPP, line);
+
+    end_line(p, line_end(p, s));
+    n->op = -1;                         /* no colour given */
+    for (;;) {
+        uint32_t i, le;
+        while (p->i < p->n && p->t[p->i].kind == TK_NEWLINE) p->i++;
+        i = p->i;
+        if (i >= p->n || p->t[i].kind == TK_EOF)
+            adda_error(line, "this 'openApplication details' is never closed - add 'end' "
+                       "after its last line");
+        le = line_end(p, i);
+        if (word_at(p, i, "end") && le == i + 1) { end_line(p, le); break; }
+
+        if (word_ci(p, i, "colour") || word_ci(p, i, "color")) {
+            const char *from, *to, *near;
+            long rgb;
+            if (le == i + 1)
+                adda_error_at(p->t[i].start, p->t[i].line, "which colour? As in: colour yellow");
+            from = p->t[i + 1].start;
+            to = token_end(&p->t[le - 1]);
+            rgb = colour_named(from, (size_t)(to - from), &near);
+            if (rgb < 0 && near)
+                adda_error_at(from, p->t[i].line, "Adda does not know the colour '%.*s' - did "
+                              "you mean '%s'?", (int)(to - from), from, near);
+            if (rgb < 0)
+                adda_error_at(from, p->t[i].line, "Adda does not know the colour '%.*s' - try "
+                              "yellow, red, blue, green, pink, or #FFCC00", (int)(to - from), from);
+            n->op = (int)rgb;
+            end_line(p, le);
+            continue;
+        }
+        if (word_ci(p, i, "title")) {
+            if (le == i + 1)
+                adda_error_at(p->t[i].start, p->t[i].line, "what should the title be? As in: "
+                              "title My Game");
+            n->a = parse_run(p, i + 1, le);
+            end_line(p, le);
+            continue;
+        }
+        adda_error_at(p->t[i].start, p->t[i].line, "openApplication details holds colour and "
+                      "title lines, as in: colour yellow - put end after them");
+    }
+    return n;
+}
+
 static Node *parse_insert(P *p)
 {
     uint32_t s = p->i, e = line_end(p, s);
@@ -1331,9 +1427,14 @@ static Node *statement(P *p)
         p->t[s + 1].start[0] == '[')
         return parse_shape_text(p);
 
+    /* openApplication details ... end: the window's settings, one per line */
+    if (word_at(p, s, "openApplication") && e == s + 2 && word_ci(p, s + 1, "details"))
+        return parse_app_details(p);
+
     /* openApplication [title]: a blank window; the program waits for it to close */
     if (word_at(p, s, "openApplication")) {
         Node *n = node(N_OPENAPP, line);
+        n->op = -1;
         if (e > s + 1) n->a = parse_run(p, s + 1, e);
         end_line(p, e);
         return n;

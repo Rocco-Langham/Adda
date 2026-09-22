@@ -1,0 +1,4 @@
+tests/errors/app_details_stray.adda:3: openApplication details holds colour and title lines, as in: colour yellow - put end after them
+     3 | print hi
+       | ^
+exit: 65

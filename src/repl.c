@@ -98,6 +98,11 @@ static bool block_still_open(TokenList tl)
 
         if (token_is_word(t, "if")  || token_is_word(t, "while") ||
             token_is_word(t, "for") || token_is_word(t, "define")) depth++;
+        else if (token_is_word(t, "delay") &&           /* not delay end */
+                 !(i + 1 < tl.count && token_is_word(&tl.tokens[i + 1], "end"))) depth++;
+        else if (token_is_word(t, "openApplication") && i + 2 < tl.count &&
+                 token_is_word(&tl.tokens[i + 1], "details") &&
+                 tl.tokens[i + 2].kind == TK_NEWLINE) depth++;
         else if (token_is_word(t, "end")) depth--;
     }
     return depth > 0;

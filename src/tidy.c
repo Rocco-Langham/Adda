@@ -381,6 +381,43 @@ static bool delay_start(const char *s, const char *e)
     return !word_at(p, e, "end");
 }
 
+/* openApplication details, or its tidy openApplication ——> details: the
+ * window's settings, a block shown the way a delay is */
+static bool app_start(const char *s, const char *e, const char *arrow)
+{
+    const char *p = skip_sp(s, e);
+    e = trim_back(s, e);
+    if (!word_at(p, e, "openApplication")) return false;
+    p = skip_sp(p + 15, e);
+    if (starts(p, e, arrow)) p = skip_sp(p + strlen(arrow), e);
+    return word_at(p, e, "details") && skip_sp(p + 7, e) == e;
+}
+
+/* either kind of block whose lines get the branch */
+static bool branch_start(const char *s, const char *e, const char *arrow)
+{
+    return delay_start(s, e) || app_start(s, e, arrow);
+}
+
+/* openApplication details  <->  openApplication ——> details. NULL: unchanged */
+static char *convert_app_line(const char *s, const char *e, const char *arrow, bool to_tidy)
+{
+    const char *p = skip_sp(s, e), *r;
+    Buf o = { NULL, 0, 0 };
+    bool isTidy;
+
+    e = trim_back(s, e);
+    r = skip_sp(p + 15, e);
+    isTidy = starts(r, e, arrow);
+    if (isTidy == to_tidy) return NULL;
+    if (isTidy) r = skip_sp(r + strlen(arrow), e);
+    put(&o, s, (size_t)(p + 15 - s));                       /* indent and "openApplication" */
+    puts_(&o, " ");
+    if (to_tidy) { puts_(&o, arrow); puts_(&o, " "); }
+    put(&o, r, (size_t)(e - r));
+    return done(&o);
+}
+
 /* end, or delay end */
 static bool delay_close(const char *s, const char *e)
 {
@@ -417,7 +454,7 @@ static int delay_end(Line *ls, int n, int i, const char *arrow, const char *bran
 {
     int j;
 
-    if (!delay_start(ls[i].s, ls[i].e)) return -1;
+    if (!branch_start(ls[i].s, ls[i].e, arrow)) return -1;
     for (j = i + 1; j < n; j++) {
         const char *s = ls[j].s, *e = ls[j].e, *p = after_branch(s, e, branch);
         if (!p) p = skip_sp(s, e);
@@ -471,7 +508,7 @@ static char *convert_delay_inner(const char *s, const char *e, const char *inden
     return done(&o);
 }
 
-/* Delay lines i .. j (its end) as they should be shown; the caret's line is
+/* Delay (or openApplication details) lines i .. j (its end) as they should be shown; the caret's line is
  * only ever turned back to raw, never tidied, so typing is not disturbed. */
 static char *convert_delay(Line *ls, int i, int j, const char *arrow, const char *branch,
                            bool to_tidy, long caretLine)
@@ -482,9 +519,12 @@ static char *convert_delay(Line *ls, int i, int j, const char *arrow, const char
 
     for (k = i; k <= j; k++) {
         bool tidyThis = to_tidy && k != caretLine;
-        char *c = k == i ? convert_delay_line(ls[k].s, ls[k].e, arrow, tidyThis)
-                         : convert_delay_inner(ls[k].s, ls[k].e, ls[i].s, indent, branch,
-                                               tidyThis, k == j);
+        char *c;
+        if (k == i)                                         /* delay - 500, openApplication details */
+            c = delay_start(ls[k].s, ls[k].e) ? convert_delay_line(ls[k].s, ls[k].e, arrow, tidyThis)
+                                              : convert_app_line(ls[k].s, ls[k].e, arrow, tidyThis);
+        else
+            c = convert_delay_inner(ls[k].s, ls[k].e, ls[i].s, indent, branch, tidyThis, k == j);
         if (k != i && k != j) c = and_print(c, ls[k].s, ls[k].e, arrow, branch, tidyThis);
         if (c && k == caretLine && to_tidy) { free(c); c = NULL; }   /* the caret's line waits */
         if (c) { puts_(&o, c); free(c); }
@@ -502,6 +542,7 @@ static char *convert_stray(const char *s, const char *e, const char *arrow, cons
     Buf o = { NULL, 0, 0 };
 
     if (delay_start(s, e)) return convert_delay_line(s, e, arrow, false);
+    if (app_start(s, e, arrow)) return convert_app_line(s, e, arrow, false);
     if (!code) return NULL;
     put(&o, s, (size_t)(p - s));
     puts_(&o, "    ");

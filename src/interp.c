@@ -702,6 +702,7 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             fflush(stdout);              /* what came before shows first */
             if (!adda_open_window(title))
                 adda_error(n->line, "openApplication cannot open a window on this computer");
+            if (n->op >= 0) adda_window_background((unsigned)n->op);
             return FLOW_NORMAL;
         }
 

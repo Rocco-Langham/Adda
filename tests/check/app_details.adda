@@ -1,0 +1,6 @@
+# openApplication details: nothing is wrong here
+openApplication details
+    colour light blue
+    title My Game
+end
+print hello
