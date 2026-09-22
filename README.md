@@ -167,7 +167,8 @@ have (try `examples`) - and nothing else; click a file to open it, and each file
 keeps its own code. **Search** finds text in your code. Clicking the icon you
 are already on collapses the panel.
 
-Press **Run** (or Ctrl+Enter). Output appears in the lower box as it happens,
+Press **Run** (or Ctrl+Enter) - or right-click it for **Run All Files**, which
+runs every file in the project in turn. Output appears in the lower box as it happens,
 and **that box is also where you type**: when your program reaches an `ask`,
 the question appears and you answer it right there and press Enter. Everything
 already printed is fixed; only the line you are typing can be edited.

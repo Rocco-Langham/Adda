@@ -539,6 +539,13 @@ changed, and Enter sends it. **Esc** clears a line you have half typed.
 **Stop** ends a program that is waiting for input it is never going to get, or
 one stuck in a loop.
 
+**Right-click Run** for **Run All Files** (or Ctrl+Shift+Enter): it runs every
+`.adda` file in the project, one after another - `first.adda` first, then the
+rest by name, then the files in any folders - each under a heading with its
+name. Each file is a program of its own, so a variable set in one is not there
+in the next, and a mistake in one file does not stop the others. Stop ends the
+whole run.
+
 Drag the divider between the code and the console to give either one more room,
 or double-click it to split them evenly. **F11** goes full screen.
 
@@ -564,7 +571,7 @@ Clicking the Explorer or Search icon you are already on closes the panel again.
 Whichever theme you pick is remembered for next time.
 
 On a Mac the window is `Adda.app` and works the same way. The keys are the
-Mac's own: **⌘R** or **⌘Return** runs, **⌘.** stops, Return answers an `ask`,
+Mac's own: **⌘R** or **⌘Return** runs, **⇧⌘R** runs all files, **⌘.** stops, Return answers an `ask`,
 **⌃⌘F** (or the green button) goes full screen, and Settings offers
 **Follow macOS** in place of Follow Windows. In the Explorer, Return renames a
 file and Delete moves it to the Trash, and the **+** at the top makes a new

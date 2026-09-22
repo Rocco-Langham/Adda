@@ -201,6 +201,7 @@ static PROCESS_INFORMATION g_pi;
 static HANDLE g_out = NULL, g_err = NULL, g_in = NULL;
 static BOOL   g_running = FALSE;
 static char   g_tmp_file[MAX_PATH * 2];
+static char   g_curPath[MAX_PATH * 3];  /* the file in the editor, or "" */
 static int    g_anchor = 0;         /* where the typed line starts */
 
 /* ── files in the Explorer ───────────────────────────────────────── */
@@ -215,6 +216,15 @@ static int  g_renameIdx = -1;
 
 #define IDM_RENAME 3001
 #define IDM_DELETE 3002
+#define IDM_RUN    3003
+#define IDM_RUNALL 3004
+#define WM_RUN_NEXT (WM_APP + 1)     /* Run All Files: start the next program */
+
+/* Run All Files: every program in the project, run one after another */
+#define MAX_RUN 256
+static char g_runPaths[MAX_RUN][MAX_PATH * 2];
+static int  g_runCount, g_runNext;
+static BOOL g_runAll;                /* a Run All Files is under way */
 
 /* ── cheat sheet filtering ───────────────────────────────────────── */
 static const Cheat *g_cheatShown[CHEAT_MAX];
@@ -922,9 +932,15 @@ static void finish_run(HWND hwnd, const char *note)
     if (note) console_append(note);
     g_anchor = console_len();
     SetFocus(hwndCode);
+
+    /* Run All Files: on to the next one, once this one has fully wound down */
+    if (g_runAll) PostMessageA(hwnd, WM_RUN_NEXT, 0, 0);
 }
 
-static void run_code(HWND hwnd)
+/* Runs `code` (len bytes) as the program called `name` - the name an error
+ * will quote. `fresh` clears the console first; Run All Files keeps what came
+ * before. */
+static BOOL start_run(HWND hwnd, const char *code, size_t len, const char *name, BOOL fresh)
 {
     char tmp_dir[MAX_PATH];
     char adda_exe[MAX_PATH];
@@ -932,27 +948,18 @@ static void run_code(HWND hwnd)
     SECURITY_ATTRIBUTES sa;
     STARTUPINFOA si;
     HANDLE hWriteOut = NULL, hWriteErr = NULL, hReadIn = NULL;
-    char *code;
-    int len;
     FILE *f;
     BOOL ok;
 
-    if (g_running) return;
-    save_current();                 /* a run is a good moment to keep your work */
-
-    len = GetWindowTextLengthA(hwndCode);
-    code = (char *)malloc((size_t)len + 2);
-    if (!code) return;
-    GetWindowTextA(hwndCode, code, len + 1);
+    if (g_running) return FALSE;
 
     GetTempPathA(MAX_PATH, tmp_dir);
-    snprintf(g_tmp_file, sizeof(g_tmp_file), "%s_adda_gui.adda", tmp_dir);
+    snprintf(g_tmp_file, sizeof(g_tmp_file), "%s%s", tmp_dir, name);
 
-    f = fopen(g_tmp_file, "w");
-    if (!f) { free(code); return; }
-    fputs(code, f);
+    f = fopen(g_tmp_file, "wb");
+    if (!f) { g_tmp_file[0] = '\0'; return FALSE; }
+    fwrite(code, 1, len, f);
     fclose(f);
-    free(code);
 
     get_adda_path(adda_exe, MAX_PATH);
     snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\"", adda_exe, g_tmp_file);
@@ -998,18 +1005,175 @@ static void run_code(HWND hwnd)
         g_anchor = console_len();
         remove(g_tmp_file);
         g_tmp_file[0] = '\0';
-        return;
+        return FALSE;
     }
 
-    SetWindowTextA(hwndConsole, "");
+    if (fresh) SetWindowTextA(hwndConsole, "");
     g_prev_byte = '\0';
-    g_anchor = 0;
+    g_anchor = console_len();
     set_running(TRUE);
     SetFocus(hwndConsole);
 
     /* Poll rather than wait: waiting for the process first deadlocks as soon
      * as it writes more than the pipe will hold, because nothing drains it. */
     SetTimer(hwnd, ID_POLL, 50, NULL);
+    return TRUE;
+}
+
+static void run_code(HWND hwnd)
+{
+    char *code;
+    const char *name;
+    int len;
+
+    if (g_running) return;
+    g_runAll = FALSE;
+    save_current();                 /* a run is a good moment to keep your work */
+
+    len = GetWindowTextLengthA(hwndCode);
+    code = (char *)malloc((size_t)len + 2);
+    if (!code) return;
+    GetWindowTextA(hwndCode, code, len + 1);
+
+    /* the file's own name, so an error says style.adda:3 */
+    name = strrchr(g_curPath, '\\');
+    name = name ? name + 1 : "program.adda";
+    start_run(hwnd, code, (size_t)len, name, TRUE);
+    free(code);
+}
+
+/* first.adda leads; the rest in name order */
+static int by_run_order(const void *a, const void *b)
+{
+    const char *x = strrchr((const char *)a, '\\'), *y = strrchr((const char *)b, '\\');
+    int xf, yf;
+    x = x ? x + 1 : (const char *)a;
+    y = y ? y + 1 : (const char *)b;
+    xf = lstrcmpiA(x, "first.adda") == 0;
+    yf = lstrcmpiA(y, "first.adda") == 0;
+    if (xf != yf) return yf - xf;
+    return lstrcmpiA(x, y);
+}
+
+/* Every program in `dir` (with a trailing backslash): its own files first,
+ * then each folder's. */
+static void collect_programs(const char *dir)
+{
+    char pattern[MAX_PATH * 2], sub[MAX_PATH * 2];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    int from = g_runCount;
+
+    snprintf(pattern, sizeof pattern, "%s*.adda", dir);
+    h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && g_runCount < MAX_RUN)
+                snprintf(g_runPaths[g_runCount++], sizeof g_runPaths[0], "%s%s", dir, fd.cFileName);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    qsort(g_runPaths[from], (size_t)(g_runCount - from), sizeof g_runPaths[0], by_run_order);
+
+    snprintf(pattern, sizeof pattern, "%s*", dir);
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.cFileName[0] != '.') {
+            snprintf(sub, sizeof sub, "%s%s\\", dir, fd.cFileName);
+            collect_programs(sub);
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+/* The next program in the queue, under a heading that says which it is. A
+ * file that cannot be read is reported and skipped. */
+static void run_next(HWND hwnd)
+{
+    size_t base = strlen(g_projectDir);
+
+    while (g_runAll && g_runNext < g_runCount && !g_running) {
+        const char *path = g_runPaths[g_runNext++];
+        const char *leaf = strrchr(path, '\\');
+        char heading[MAX_PATH * 3];
+        FILE *f;
+        long size;
+        char *code;
+        BOOL started;
+
+        leaf = leaf ? leaf + 1 : path;
+        snprintf(heading, sizeof heading, "-- %s --\r\n",
+                 strncmp(path, g_projectDir, base) == 0 ? path + base : leaf);
+        console_append(heading);
+        g_anchor = console_len();
+
+        f = fopen(path, "rb");
+        if (!f) { console_append("[could not read this file]\r\n\r\n"); continue; }
+        fseek(f, 0, SEEK_END);
+        size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        code = (char *)malloc((size_t)(size > 0 ? size : 0) + 1);
+        if (!code) { fclose(f); continue; }
+        size = (long)fread(code, 1, (size_t)(size > 0 ? size : 0), f);
+        fclose(f);
+        started = start_run(hwnd, code, (size_t)size, leaf, FALSE);
+        free(code);
+        if (started) return;
+        g_runAll = FALSE;           /* adda.exe itself is missing: no point going on */
+        return;
+    }
+    if (g_runAll && !g_running) {
+        char done[64];
+        snprintf(done, sizeof done, "[finished - ran %d file%s]\r\n",
+                 g_runCount, g_runCount == 1 ? "" : "s");
+        console_append(done);
+        g_anchor = console_len();
+        g_runAll = FALSE;
+    }
+}
+
+/* Runs every program in the project, one after another, each as a program of
+ * its own - nothing one file sets is seen by the next. */
+static void run_all_files(HWND hwnd)
+{
+    if (g_running) return;
+    if (!g_projectDir[0]) {
+        MessageBoxA(hwnd, "Open a project first.\n"
+                          "New Project makes one, and Import Folder can open one you already have.",
+                    "Run All Files", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    save_current();                 /* what you just typed is part of "all" */
+    g_runCount = 0;
+    g_runNext = 0;
+    collect_programs(g_projectDir);
+    if (!g_runCount) {
+        MessageBoxA(hwnd, "There are no .adda files in this project to run.",
+                    "Run All Files", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    SetWindowTextA(hwndConsole, "");
+    g_anchor = 0;
+    g_runAll = TRUE;
+    run_next(hwnd);
+}
+
+/* right-click on Run: this file, or every file */
+static void run_menu(HWND hwnd, int sx, int sy)
+{
+    HMENU m = CreatePopupMenu();
+    UINT idle = g_running ? MF_GRAYED : MF_ENABLED;
+    int pick;
+
+    AppendMenuA(m, MF_STRING | idle, IDM_RUN, "Run This File\tCtrl+Enter");
+    AppendMenuA(m, MF_STRING | (g_projectDir[0] ? idle : MF_GRAYED), IDM_RUNALL,
+                "Run All Files\tCtrl+Shift+Enter");
+    pick = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                               sx, sy, 0, hwnd, NULL);
+    DestroyMenu(m);
+    if (pick == IDM_RUN) run_code(hwnd);
+    if (pick == IDM_RUNALL) run_all_files(hwnd);
 }
 
 /* Sends everything typed after the anchor down the pipe. */
@@ -1226,7 +1390,6 @@ static void rescan_files(void)
 /* Each file is its own document: the editor holds whichever one is open, and
  * what is typed goes back into that file - when another is opened, before a
  * run, and on closing - so typing in one never turns up in another. */
-static char g_curPath[MAX_PATH * 3];  /* the file in the editor, or "" */
 static BOOL g_dirty;                  /* typed in since it was loaded or saved */
 static BOOL g_loading;                /* the EN_CHANGE is ours, not typing */
 
@@ -3150,6 +3313,7 @@ static void ab_click(HWND hwnd, int item)
         if (!g_running) run_code(hwnd);
         break;
     case AB_STOP:
+        g_runAll = FALSE;               /* Stop ends Run All Files too */
         if (g_running) {
             TerminateProcess(g_pi.hProcess, 1);
             finish_run(hwnd, "\r\n[stopped]\r\n");
@@ -3335,7 +3499,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             file_menu(hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
             return 0;
         }
+        if ((HWND)wParam == hwnd && lParam != -1) {     /* a right-click on Run */
+            POINT p;
+            p.x = GET_X_LPARAM(lParam);
+            p.y = GET_Y_LPARAM(lParam);
+            ScreenToClient(hwnd, &p);
+            if (ab_hit(p) == AB_RUN) {
+                run_menu(hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+                return 0;
+            }
+        }
         break;
+
+    case WM_RUN_NEXT:
+        run_next(hwnd);
+        return 0;
 
     case WM_SETCURSOR: {
         POINT p;
@@ -3530,6 +3708,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_DESTROY:
         save_current();
+        g_runAll = FALSE;
         if (g_running) {
             TerminateProcess(g_pi.hProcess, 1);
             finish_run(hwnd, NULL);
@@ -3636,7 +3815,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
         }
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
             && (GetKeyState(VK_CONTROL) & 0x8000)) {
-            run_code(hwnd);
+            if (GetKeyState(VK_SHIFT) & 0x8000) run_all_files(hwnd);
+            else run_code(hwnd);
             continue;
         }
         TranslateMessage(&msg);

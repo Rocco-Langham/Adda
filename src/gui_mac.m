@@ -223,6 +223,12 @@ static int            g_outFd = -1;   /* its stdout and stderr, one pipe */
 static int            g_inFd = -1;
 static BOOL           g_running = NO;
 static NSString      *g_tmpFile;
+static NSString      *g_curPath;      /* the file in the editor, or nil */
+static BOOL           g_dirty;        /* typed in since it was loaded or saved */
+/* Run All Files: the programs still to run, and how many there were */
+static NSMutableArray<NSString *> *g_runQueue;
+static NSUInteger     g_runTotal;
+static void run_next(void);
 static NSUInteger     g_anchor = 0;   /* where the typed line starts */
 static NSTimer       *g_poll;
 static NSMutableData *g_carry;        /* the front half of a split character */
@@ -265,6 +271,9 @@ static void refresh_cheats(void);
 static void open_cheat(NSInteger shownIndex);
 static void show_cheat(const Cheat *c);
 static void run_code(void);
+static void run_all_files(void);
+static void need_project(void);
+static NSArray<NSString *> *scan_children(NSString *dir);
 static void save_current(void);
 static void check_code(void);
 static void new_project(void);
@@ -889,6 +898,15 @@ static void finish_run(NSString *note)
     if (note) console_append(note);
     g_anchor = console_len();
     [g_win makeFirstResponder:g_code];
+
+    /* Run All Files: on to the next one, once this one has fully wound down */
+    if (g_runQueue.count) dispatch_async(dispatch_get_main_queue(), ^{ run_next(); });
+    else if (g_runQueue) {
+        console_append([NSString stringWithFormat:@"[finished - ran %lu file%@]\n",
+                        (unsigned long)g_runTotal, g_runTotal == 1 ? @"" : @"s"]);
+        g_anchor = console_len();
+        g_runQueue = nil;
+    }
 }
 
 static void poll_run(void)
@@ -902,10 +920,11 @@ static void poll_run(void)
         finish_run(@"\n");
 }
 
-static void run_code(void)
+/* Runs `code` as the program called `name` - the name an error will quote.
+ * `fresh` clears the console first; Run All Files keeps what came before. */
+static BOOL start_run(NSString *code, NSString *name, BOOL fresh)
 {
     NSString *dir = NSTemporaryDirectory();
-    NSString *name = @"_adda_gui.adda";
     NSString *exe = adda_path();
     int outp[2] = { -1, -1 }, inp[2] = { -1, -1 };
     posix_spawn_file_actions_t fa;
@@ -915,14 +934,13 @@ static void run_code(void)
     pid_t pid;
     int err;
 
-    if (g_running) return;
-    save_current();                 /* a run is a good moment to keep your work */
+    if (g_running) return NO;
 
     g_tmpFile = [dir stringByAppendingPathComponent:name];
-    if (![g_code.string writeToFile:g_tmpFile atomically:NO
-                           encoding:NSUTF8StringEncoding error:NULL]) {
+    if (![code writeToFile:g_tmpFile atomically:NO
+                  encoding:NSUTF8StringEncoding error:NULL]) {
         g_tmpFile = nil;
-        return;
+        return NO;
     }
 
     if (pipe(outp) != 0 || pipe(inp) != 0) {
@@ -967,7 +985,7 @@ static void run_code(void)
         g_anchor = console_len();
         unlink(g_tmpFile.fileSystemRepresentation);
         g_tmpFile = nil;
-        return;
+        return NO;
     }
 
     g_pid = pid;
@@ -978,9 +996,9 @@ static void run_code(void)
     fcntl(g_outFd, F_SETFD, FD_CLOEXEC);
     fcntl(g_inFd, F_SETFD, FD_CLOEXEC);
 
-    console_replace(NSMakeRange(0, console_len()), @"");
+    if (fresh) console_replace(NSMakeRange(0, console_len()), @"");
     g_carry.length = 0;
-    g_anchor = 0;
+    g_anchor = console_len();
     set_running(YES);
     [g_win makeFirstResponder:g_console];
 
@@ -990,6 +1008,87 @@ static void run_code(void)
     g_poll = [NSTimer timerWithTimeInterval:0.05 repeats:YES
                                       block:^(NSTimer *t) { (void)t; poll_run(); }];
     [NSRunLoop.mainRunLoop addTimer:g_poll forMode:NSRunLoopCommonModes];
+    return YES;
+}
+
+static void run_code(void)
+{
+    if (g_running) return;
+    g_runQueue = nil;
+    save_current();                 /* a run is a good moment to keep your work */
+    /* the file's own name, so an error says style.adda:3 */
+    start_run(g_code.string, g_curPath ? g_curPath.lastPathComponent : @"program.adda", YES);
+}
+
+/* Every program in `dir`: its own files first - first.adda leading - then
+ * each folder's, in the order the Explorer shows them. */
+static void collect_programs(NSString *dir, NSMutableArray<NSString *> *out)
+{
+    NSMutableArray<NSString *> *files = [NSMutableArray array], *dirs = [NSMutableArray array];
+    BOOL isDir = NO;
+
+    for (NSString *kid in scan_children(dir)) {
+        if ([NSFileManager.defaultManager fileExistsAtPath:kid isDirectory:&isDir] && isDir)
+            [dirs addObject:kid];
+        else if ([kid.lastPathComponent caseInsensitiveCompare:@"first.adda"] == NSOrderedSame)
+            [files insertObject:kid atIndex:0];
+        else
+            [files addObject:kid];
+    }
+    [out addObjectsFromArray:files];
+    for (NSString *d in dirs) collect_programs(d, out);
+}
+
+/* The next program in the queue, under a heading that says which it is. A
+ * file that cannot be read is reported and skipped. */
+static void run_next(void)
+{
+    while (g_runQueue.count && !g_running) {
+        NSString *path = g_runQueue.firstObject, *code, *label;
+        [g_runQueue removeObjectAtIndex:0];
+
+        label = g_home && [path hasPrefix:[g_home stringByAppendingString:@"/"]]
+              ? [path substringFromIndex:g_home.length + 1] : path.lastPathComponent;
+        console_append([NSString stringWithFormat:@"-- %@ --\n", label]);
+        g_anchor = console_len();
+
+        code = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+        if (!code) {
+            console_append(@"[could not read this file]\n\n");
+            g_anchor = console_len();
+            continue;
+        }
+        if (start_run(code, path.lastPathComponent, NO)) return;
+        g_runQueue = nil;           /* adda itself is missing: no point going on */
+        return;
+    }
+    if (g_runQueue && !g_runQueue.count && !g_running) {
+        console_append([NSString stringWithFormat:@"[finished - ran %lu file%@]\n",
+                        (unsigned long)g_runTotal, g_runTotal == 1 ? @"" : @"s"]);
+        g_anchor = console_len();
+        g_runQueue = nil;
+    }
+}
+
+/* Runs every program in the project, one after another, each as a program of
+ * its own - nothing one file sets is seen by the next. */
+static void run_all_files(void)
+{
+    NSMutableArray<NSString *> *all = [NSMutableArray array];
+
+    if (g_running) return;
+    if (!g_home) { need_project(); return; }
+    save_current();                 /* what you just typed is part of "all" */
+    collect_programs(g_home, all);
+    if (!all.count) {
+        warn(@"There are no .adda files in this project to run.");
+        return;
+    }
+    console_replace(NSMakeRange(0, console_len()), @"");
+    g_anchor = 0;
+    g_runQueue = all;
+    g_runTotal = all.count;
+    run_next();
 }
 
 static void stop_code(void)
@@ -997,6 +1096,7 @@ static void stop_code(void)
     int status;
 
     if (!g_running) return;
+    g_runQueue = nil;               /* Stop ends Run All Files too */
     kill(g_pid, SIGKILL);
     while (waitpid(g_pid, &status, 0) < 0 && errno == EINTR) {}
     finish_run(@"\n[stopped]\n");
@@ -1100,8 +1200,6 @@ static void rescan_files(void)
 /* Each file is its own document: the editor holds whichever one is open, and
  * what is typed goes back into that file - when another is opened, before a
  * run, and on quitting - so typing in one never turns up in another. */
-static NSString *g_curPath;           /* the file in the editor, or nil */
-static BOOL      g_dirty;             /* typed in since it was loaded or saved */
 
 static void save_current(void)
 {
@@ -2343,6 +2441,7 @@ static void build_menu(void)
 
     m = menu_in(bar, @"Run");
     add(m, @"Run", @selector(runCode:), @"r", CMD, g_adda);
+    add(m, @"Run All Files", @selector(runAllFiles:), @"r", CMD | SHIFT, g_adda);
     add(m, @"Stop", @selector(stopCode:), @".", CMD, g_adda);
 
     m = menu_in(bar, @"View");
@@ -2368,6 +2467,17 @@ static void build_menu(void)
 }
 
 - (BOOL)isFlipped { return YES; }
+
+/* right-click (or Control-click) on Run: this file, or every file */
+- (NSMenu *)menuForEvent:(NSEvent *)e
+{
+    NSMenu *m;
+    if (ab_hit([self convertPoint:e.locationInWindow fromView:nil]) != AB_RUN) return nil;
+    m = [NSMenu new];
+    add(m, @"Run This File", @selector(runCode:), @"", 0, g_adda);
+    add(m, @"Run All Files", @selector(runAllFiles:), @"", 0, g_adda);
+    return m;
+}
 
 /* a click on an icon acts even when the window was not in front */
 - (BOOL)acceptsFirstMouse:(NSEvent *)e { (void)e; return YES; }
@@ -3167,6 +3277,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
 /* ── menu actions ─────────────────────────────────────────────── */
 
 - (void)runCode:(id)sender       { (void)sender; run_code(); }
+- (void)runAllFiles:(id)sender   { (void)sender; run_all_files(); }
 - (void)stopCode:(id)sender      { (void)sender; stop_code(); }
 - (void)openSettings:(id)sender  { (void)sender; open_settings(); }
 - (void)openCheats:(id)sender    { (void)sender; open_cheats(); }
@@ -3233,6 +3344,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
 - (BOOL)validateMenuItem:(NSMenuItem *)item
 {
     if (item.action == @selector(runCode:))  return !g_running;
+    if (item.action == @selector(runAllFiles:)) return !g_running && g_home != nil;
     if (item.action == @selector(stopCode:)) return g_running;
     return YES;
 }
