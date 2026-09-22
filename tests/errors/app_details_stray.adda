@@ -1,3 +1,4 @@
-openApplication details
-    colour yellow
-print hi
+openApplication
+details;
+colour yellow
+size 5

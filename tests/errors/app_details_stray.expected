@@ -1,4 +1,4 @@
-tests/errors/app_details_stray.adda:3: openApplication details holds colour and title lines, as in: colour yellow - put end after them
-     3 | print hi
+tests/errors/app_details_stray.adda:4: I do not know what to do with this line - did you mean 'print size 5'?
+     4 | size 5
        | ^
 exit: 65

@@ -374,9 +374,9 @@ static const Cheat CHEAT_WINDOWS[] = {
   "openApplication My App\r\nprint Hello from my app", 0 },
 
 { "Colour the window",
-  "openApplication details sets the window up: its colour and its title. background, colour, color, yellow, title, details",
-  "Opens a window with a yellow background and the title My Game. The lines between openApplication details and end are its settings: colour takes a colour's name - yellow, red, blue, green, pink, purple, orange, light blue, navy and more - or one like #FFCC00, and title is the words at the top of the window. Text and shapes turn dark or light so they are easy to read on it.",
-  "openApplication details\r\n    colour yellow\r\n    title My Game\r\nend\r\nprint Hello", 0 },
+  "A details; line under openApplication sets the window up: its colour and its title. background, colour, color, yellow, title, details",
+  "Opens a window with a yellow background and the title My Game. The lines after details; are its settings: colour takes a colour's name - yellow, red, blue, green, pink, purple, orange, light blue, navy and more - or one like #FFCC00, and title is the words at the top of the window. They run until the first line that is not a setting, so no end is needed. You can also write it as openApplication details on one line, with end after the settings. Text and shapes turn dark or light so they are easy to read on the colour.",
+  "openApplication\r\ndetails;\r\ncolour yellow\r\ntitle My Game\r\nprint Hello", 0 },
 };
 
 /* ---- shapes ------------------------------------------------------------ */

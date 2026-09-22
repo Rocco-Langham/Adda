@@ -965,26 +965,44 @@ static long colour_named(const char *from, size_t len, const char **nearest)
     return -1;
 }
 
-/* openApplication details
- *     colour yellow
- *     title My Game
- * end */
-static Node *parse_app_details(P *p)
+/* True for a line that is just `details`, or `details;` - the way a shape's
+ * settings are written. */
+static bool details_word(P *p, uint32_t i)
 {
-    uint32_t s = p->i, line = p->t[s].line;
-    Node *n = node(N_OPENAPP, line);
+    return i < p->n && p->t[i].kind == TK_WORD &&
+           (same_ci(p->t[i].start, p->t[i].len, "details") ||
+            same_ci(p->t[i].start, p->t[i].len, "details;"));
+}
 
-    end_line(p, line_end(p, s));
+static bool details_line(P *p, uint32_t i)
+{
+    return details_word(p, i) && line_end(p, i) == i + 1;
+}
+
+/* The window's settings, written either way:
+ *
+ *   openApplication details        openApplication
+ *       colour yellow              details;
+ *       title My Game              colour yellow
+ *   end                            title My Game
+ *
+ * The settings run to an `end`, or to the first line that is not one. */
+static Node *parse_app_details(P *p, uint32_t s, Node *n)
+{
+    uint32_t line = p->t[s].line;
+
+    end_line(p, line_end(p, p->i));
     n->op = -1;                         /* no colour given */
+    (void)line;
     for (;;) {
         uint32_t i, le;
         while (p->i < p->n && p->t[p->i].kind == TK_NEWLINE) p->i++;
         i = p->i;
-        if (i >= p->n || p->t[i].kind == TK_EOF)
-            adda_error(line, "this 'openApplication details' is never closed - add 'end' "
-                       "after its last line");
+        if (i >= p->n || p->t[i].kind == TK_EOF) break;
         le = line_end(p, i);
         if (word_at(p, i, "end") && le == i + 1) { end_line(p, le); break; }
+        if (!word_ci(p, i, "colour") && !word_ci(p, i, "color") && !word_ci(p, i, "title"))
+            break;                      /* the settings are over */
 
         if (word_ci(p, i, "colour") || word_ci(p, i, "color")) {
             const char *from, *to, *near;
@@ -1012,8 +1030,6 @@ static Node *parse_app_details(P *p)
             end_line(p, le);
             continue;
         }
-        adda_error_at(p->t[i].start, p->t[i].line, "openApplication details holds colour and "
-                      "title lines, as in: colour yellow - put end after them");
     }
     return n;
 }
@@ -1427,9 +1443,18 @@ static Node *statement(P *p)
         p->t[s + 1].start[0] == '[')
         return parse_shape_text(p);
 
-    /* openApplication details ... end: the window's settings, one per line */
-    if (word_at(p, s, "openApplication") && e == s + 2 && word_ci(p, s + 1, "details"))
-        return parse_app_details(p);
+    /* openApplication details ... : the window's settings, one per line, either
+     * on the openApplication line or as a details; line under it */
+    if (word_at(p, s, "openApplication") &&
+        ((e == s + 2 && details_word(p, s + 1)) ||
+         (e == s + 1 && details_line(p, e + 1)))) {
+        Node *n = node(N_OPENAPP, line);
+        if (e == s + 1) {               /* details; on its own line */
+            end_line(p, e);
+            while (p->i < p->n && p->t[p->i].kind == TK_NEWLINE) p->i++;
+        }
+        return parse_app_details(p, s, n);
+    }
 
     /* openApplication [title]: a blank window; the program waits for it to close */
     if (word_at(p, s, "openApplication")) {

@@ -311,8 +311,16 @@ Questions from `ask` still appear in the console.
 
 #### The window's colour
 
-`openApplication details` opens the window with settings, one per line,
-closed with `end`:
+The window's settings go one per line, under `openApplication`. Write them
+either way - `details;` on its own line, or `openApplication details`:
+
+```adda
+openApplication
+details;
+colour yellow
+title My Game
+print Hello
+```
 
 ```adda
 openApplication details
@@ -322,13 +330,18 @@ end
 print Hello
 ```
 
+The settings run to an `end`, or simply to the first line that is not one,
+so the `end` is yours to use or leave out.
+
 `colour` (or `color`) is the background: yellow, red, orange, green, blue,
 purple, pink, brown, black, white, grey, light grey, dark grey, light blue,
 dark blue, navy, light green, dark green, teal, cyan, gold, silver, beige,
 cream or lime - or any colour written as `#FFCC00`. Text, shapes and input
 boxes turn dark or light so they stay easy to read on it. `title` is the
 words at the top of the window. In the tidy view it shows the way a delay
-does: `openApplication ——> details`, then `└─>` in front of each setting.
+does: `openApplication ——> details`, then `└─>colour ——> yellow` for each
+setting. A `details;` line is left as you wrote it, with the settings
+branching under it.
 
 #### Shapes
 

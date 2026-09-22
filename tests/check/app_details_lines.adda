@@ -1,0 +1,6 @@
+# the window settings, written under openApplication
+openApplication
+details;
+colour yellow
+title My Game
+print hello
