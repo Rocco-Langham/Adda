@@ -42,6 +42,7 @@
 #include <string.h>
 
 #include "gui_cheatsheet.h"
+#include "tidy.h"
 
 /* ── ids ─────────────────────────────────────────────────────────── */
 #define ID_CODE      1001
@@ -147,13 +148,13 @@ static int    g_dpi = 96;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR,
-       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW };
+       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW, ICON_TIDY };
 /* New project, Run and Stop sit under Search; Check, Cheat sheet and Settings are pinned
  * to the bottom. Everything before AB_CHECK stacks from the top. */
-enum { AB_EXPLORER = 0, AB_SEARCH, AB_NEW, AB_RUN, AB_STOP, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
+enum { AB_EXPLORER = 0, AB_SEARCH, AB_NEW, AB_RUN, AB_STOP, AB_TIDY, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
 
 static const int AB_ICON[AB_COUNT] = {
-    ICON_EXPLORER, ICON_SEARCH, ICON_NEW, ICON_PLAY, ICON_STOP, ICON_CHECK, ICON_CHEAT, ICON_GEAR
+    ICON_EXPLORER, ICON_SEARCH, ICON_NEW, ICON_PLAY, ICON_STOP, ICON_TIDY, ICON_CHECK, ICON_CHEAT, ICON_GEAR
 };
 
 static int  g_view = AB_EXPLORER;   /* which panel view, or -1 when collapsed */
@@ -219,6 +220,7 @@ static int  g_renameIdx = -1;
 #define IDM_RUN    3003
 #define IDM_RUNALL 3004
 #define WM_RUN_NEXT (WM_APP + 1)     /* Run All Files: start the next program */
+#define WM_TIDY     (WM_APP + 2)     /* bring the tidy view up to date */
 
 /* Run All Files: every program in the project, run one after another */
 #define MAX_RUN 256
@@ -259,6 +261,34 @@ static BOOL system_is_dark(void)
         RegCloseKey(key);
     }
     return light == 0;
+}
+
+/* The tidy view: on unless it was turned off. The long arrow is an em dash
+ * where the code box can show one (the usual Windows code page), else => */
+static BOOL g_tidy = TRUE;
+static BOOL g_tidying;                /* our own change to the text, not typing */
+static const char *tidy_arrow(void) { return GetACP() == 1252 ? "\x97>" : "=>"; }
+
+static void load_tidy(void)
+{
+    HKEY key;
+    DWORD v = 1, size = sizeof(v);
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Adda", 0, KEY_READ, &key) == ERROR_SUCCESS) {
+        RegQueryValueExA(key, "TidyView", NULL, NULL, (BYTE *)&v, &size);
+        RegCloseKey(key);
+    }
+    g_tidy = v != 0;
+}
+
+static void save_tidy(void)
+{
+    HKEY key;
+    DWORD v = g_tidy ? 1 : 0;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Adda", 0, NULL, 0,
+                        KEY_WRITE, NULL, &key, NULL) == ERROR_SUCCESS) {
+        RegSetValueExA(key, "TidyView", 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+        RegCloseKey(key);
+    }
 }
 
 static void load_pick(void)
@@ -545,6 +575,22 @@ static void icon_shape(HDC dc, int kind, int side, COLORREF fg, COLORREF bg)
         Polyline(dc, plus, 2);
         plus[0] = NP(37, 59, side); plus[1] = NP(63, 59, side);
         Polyline(dc, plus, 2);
+        break;
+    }
+
+    case ICON_TIDY: {
+        /* lines of code, neatly ruled: a short arrow leading each one */
+        POINT seg[3];
+        int row;
+        for (row = 0; row < 3; row++) {
+            int y = 26 + row * 24, len = row == 1 ? 76 : row == 2 ? 84 : 88;
+            seg[0] = NP(12, y, side); seg[1] = NP(30, y, side);
+            Polyline(dc, seg, 2);
+            seg[0] = NP(24, y - 6, side); seg[1] = NP(30, y, side); seg[2] = NP(24, y + 6, side);
+            Polyline(dc, seg, 3);
+            seg[0] = NP(42, y, side); seg[1] = NP(len, y, side);
+            Polyline(dc, seg, 2);
+        }
         break;
     }
 
@@ -1030,10 +1076,8 @@ static void run_code(HWND hwnd)
     g_runAll = FALSE;
     save_current();                 /* a run is a good moment to keep your work */
 
-    len = GetWindowTextLengthA(hwndCode);
-    code = (char *)malloc((size_t)len + 2);
+    code = code_text(&len);
     if (!code) return;
-    GetWindowTextA(hwndCode, code, len + 1);
 
     /* the file's own name, so an error says style.adda:3 */
     name = strrchr(g_curPath, '\\');
@@ -1393,13 +1437,19 @@ static void rescan_files(void)
 static BOOL g_dirty;                  /* typed in since it was loaded or saved */
 static BOOL g_loading;                /* the EN_CHANGE is ours, not typing */
 
-/* the code box's text with the EDIT control's \r\n put back to \n; caller frees */
+/* The code box's text as it really is - the tidy view turned back to raw,
+ * since it is only a way of showing the code - with the EDIT control's \r\n
+ * put back to \n. Anything saved or run goes through here. Caller frees. */
 static char *code_text(int *outLen)
 {
     int len = GetWindowTextLengthA(hwndCode), i, j;
-    char *text = malloc((size_t)len + 1);
+    char *shown = malloc((size_t)len + 1), *text;
+    if (!shown) return NULL;
+    GetWindowTextA(hwndCode, shown, len + 1);
+    text = tidy_raw(shown, tidy_arrow());
+    free(shown);
     if (!text) return NULL;
-    GetWindowTextA(hwndCode, text, len + 1);
+    len = (int)strlen(text);
     for (i = j = 0; i < len; i++)
         if (!(text[i] == '\r' && text[i + 1] == '\n')) text[j++] = text[i];
     text[j] = '\0';
@@ -1490,6 +1540,7 @@ static void open_file(int index)
             snprintf(g_curPath, sizeof g_curPath, "%s", g_files[index].path);
             g_dirty = FALSE;
             show_current();
+            PostMessageA(hwndMain, WM_TIDY, 0, 0);
             free(raw);
         }
         free(buf);
@@ -1817,14 +1868,14 @@ static void layout(HWND hwnd)
         RECT *r = &g_abRect[i];
         r->left = 0;
         r->right = abW;
-        if (i < AB_CHECK) { r->top = top; top += S(44) + (i == AB_SEARCH ? S(6) : 0); }
+        if (i < AB_TIDY) { r->top = top; top += S(44) + (i == AB_SEARCH ? S(6) : 0); }
         else              { r->top = bottom; bottom += S(44); }
         r->bottom = r->top + S(44);
     }
     /* the bottom items were laid out downwards; push them to the bottom */
     {
         int shift = rc.bottom - S(8) - g_abRect[AB_GEAR].bottom;
-        for (i = AB_CHECK; i < AB_COUNT; i++) {
+        for (i = AB_TIDY; i < AB_COUNT; i++) {
             g_abRect[i].top += shift;
             g_abRect[i].bottom += shift;
         }
@@ -1929,6 +1980,80 @@ typedef struct { int line, col, len; } CheckMark;   /* line 1-based, col in char
 static CheckMark g_chk[MAX_CHECK];
 static int       g_chkCount;
 
+/* Brings the code box's tidy view up to date: finished named shapes tidied,
+ * the one the caret is in shown raw. Only the display changes - the file and
+ * the dirty flag are left alone. */
+static void tidy_update(void)
+{
+    int len, n, k, first;
+    char *text;
+    DWORD selA = 0, selB = 0;
+    long caretLine = 0, caretCol, i, lineStart = 0;
+    TidyEdit ed[128];
+
+    if (g_tidying || !hwndCode) return;
+    /* while the check marks are up the text must stay as they were made on */
+    if (g_tidy && g_chkCount) return;
+
+    len = GetWindowTextLengthA(hwndCode);
+    text = malloc((size_t)len + 1);
+    if (!text) return;
+    GetWindowTextA(hwndCode, text, len + 1);
+    SendMessageA(hwndCode, EM_GETSEL, (WPARAM)&selA, (LPARAM)&selB);
+    for (i = 0; i < (long)selA && i < len; i++)
+        if (text[i] == '\n') { caretLine++; lineStart = i + 1; }
+    caretCol = (long)selA - lineStart;
+
+    n = tidy_edits(text, tidy_arrow(), GetFocus() == hwndCode ? caretLine : -1, g_tidy, ed, 128);
+    if (!n) { free(text); return; }
+
+    g_tidying = TRUE;
+    g_loading = TRUE;                 /* not typing, so not an edit to save */
+    first = (int)SendMessageA(hwndCode, EM_GETFIRSTVISIBLELINE, 0, 0);
+    SendMessageA(hwndCode, WM_SETREDRAW, FALSE, 0);
+    for (k = n - 1; k >= 0; k--) {
+        SendMessageA(hwndCode, EM_SETSEL, (WPARAM)ed[k].start, (LPARAM)(ed[k].start + ed[k].len));
+        SendMessageA(hwndCode, EM_REPLACESEL, FALSE, (LPARAM)ed[k].with);
+    }
+    tidy_free_edits(ed, n);
+    free(text);
+
+    /* the same line and, as near as it can be, the same place on it: the
+     * change never adds or removes a line */
+    len = GetWindowTextLengthA(hwndCode);
+    text = malloc((size_t)len + 1);
+    if (text) {
+        long line = caretLine, end;
+        GetWindowTextA(hwndCode, text, len + 1);
+        lineStart = 0;
+        for (i = 0; i < len && line; i++)
+            if (text[i] == '\n') { line--; lineStart = i + 1; }
+        for (end = lineStart; end < len && text[end] != '\r' && text[end] != '\n'; end++) {}
+        if (caretCol > end - lineStart) caretCol = end - lineStart;
+        SendMessageA(hwndCode, EM_SETSEL, (WPARAM)(lineStart + caretCol), (LPARAM)(lineStart + caretCol));
+        free(text);
+    }
+    SendMessageA(hwndCode, EM_LINESCROLL, 0,
+                 (LPARAM)(first - (int)SendMessageA(hwndCode, EM_GETFIRSTVISIBLELINE, 0, 0)));
+    SendMessageA(hwndCode, EM_EMPTYUNDOBUFFER, 0, 0);   /* its undo would be of text now gone */
+    SendMessageA(hwndCode, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(hwndCode, NULL, TRUE);
+    g_loading = FALSE;
+    g_tidying = FALSE;
+}
+
+static void toggle_tidy(HWND hwnd)
+{
+    g_tidy = !g_tidy;
+    save_tidy();
+    if (g_tidy && g_chkCount) {        /* the marks were holding it back */
+        g_chkCount = 0;
+        InvalidateRect(hwndCode, NULL, FALSE);
+    }
+    tidy_update();
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
 /* Runs adda --check over what is in the editor, keeps where each mistake is
  * for paint_check, and lists them in the console. */
 static void check_code(void)
@@ -1945,6 +2070,13 @@ static void check_code(void)
     FILE *f;
 
     g_chkCount = 0;
+
+    /* the marks go on the raw code, so show it; tidy view waits until they go */
+    if (g_tidy) {
+        g_tidy = FALSE;
+        tidy_update();
+        g_tidy = TRUE;
+    }
 
     len = GetWindowTextLengthA(hwndCode);
     code = malloc((size_t)len + 1);
@@ -2169,6 +2301,10 @@ static LRESULT CALLBACK CodeProc(HWND h, UINT msg, WPARAM w, LPARAM l,
         paint_check(h);
         paint_gutter(h);
     }
+    /* the caret may have moved onto a tidy line, or off one */
+    if ((msg == WM_KEYUP || msg == WM_LBUTTONUP || msg == WM_SETFOCUS || msg == WM_KILLFOCUS) &&
+        !g_tidying)
+        PostMessageA(hwndMain, WM_TIDY, 0, 0);
     return res;
 }
 
@@ -2191,7 +2327,7 @@ static void paint_main(HWND hwnd, HDC hdc)
         RECT box = g_abRect[i];
         RECT icon, pill;
         int shrink = 0;
-        BOOL active = (i == g_view);
+        BOOL active = (i == g_view) || (i == AB_TIDY && g_tidy);   /* lit while it is on */
         /* Run only makes sense while idle, Stop only while running */
         BOOL disabled = (i == AB_RUN && g_running) || (i == AB_STOP && !g_running);
         double glow = disabled ? 0 : g_abGlow[i];
@@ -3319,6 +3455,9 @@ static void ab_click(HWND hwnd, int item)
             finish_run(hwnd, "\r\n[stopped]\r\n");
         }
         break;
+    case AB_TIDY:
+        toggle_tidy(hwnd);
+        break;
     case AB_CHECK:
         check_code();
         break;
@@ -3346,6 +3485,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         hwndMain = hwnd;
         g_curNS = LoadCursorA(NULL, IDC_SIZENS);
         load_pick();
+        load_tidy();
         g_t = theme_for(g_pick);
         hBrushBg      = CreateSolidBrush(g_t.bg);
         hBrushSurface = CreateSolidBrush(g_t.surface);
@@ -3515,6 +3655,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         run_next(hwnd);
         return 0;
 
+    case WM_TIDY:
+        tidy_update();
+        return 0;
+
     case WM_SETCURSOR: {
         POINT p;
         RECT hit;
@@ -3680,8 +3824,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         case ID_CODE:
             /* a new or removed line renumbers everything below it */
-            if (HIWORD(wParam) == EN_CHANGE && !g_loading)
+            if (HIWORD(wParam) == EN_CHANGE && !g_loading) {
                 g_dirty = TRUE;              /* belongs to the open file now */
+                PostMessageA(hwnd, WM_TIDY, 0, 0);
+            }
             if (HIWORD(wParam) == EN_CHANGE && g_chkCount) {
                 g_chkCount = 0;              /* the marks no longer line up */
                 InvalidateRect(hwndCode, NULL, FALSE);

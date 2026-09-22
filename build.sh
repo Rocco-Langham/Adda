@@ -69,12 +69,12 @@ echo "built ./adda ($MODE)"
 if [ "$(uname -o 2>/dev/null)" = "Msys" ] || [ "$OS" = "Windows_NT" ]; then
     "${WINDRES:-windres}" -I src src/adda-gui.rc -o adda-gui-res.o
     "$CC" $WARN $DEFS $FLAGS -mwindows -o adda-gui \
-        src/gui.c adda-gui-res.o \
+        src/gui.c src/tidy.c adda-gui-res.o \
         -lcomctl32 -lcomdlg32 -ldwmapi -luxtheme -lgdi32 -lshell32 -lole32
     echo "built ./adda-gui ($MODE)"
 elif [ "$(uname -s)" = "Darwin" ]; then
     "$CC" ${WARN#-std=c99 } $FLAGS -fobjc-arc -mmacosx-version-min=11.0 \
-        -o adda-gui src/gui_mac.m -framework Cocoa -framework QuartzCore -framework UniformTypeIdentifiers
+        -o adda-gui src/gui_mac.m src/tidy.c -framework Cocoa -framework QuartzCore -framework UniformTypeIdentifiers
     rm -rf Adda.app
     mkdir -p Adda.app/Contents/MacOS
     cp src/adda-gui.plist Adda.app/Contents/Info.plist

@@ -30,6 +30,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#include "tidy.h"
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -190,18 +191,18 @@ static NSFont *g_fontMono, *g_fontUI, *g_fontUIBold, *g_fontSmall;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR, ICON_PLUS,
-       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW };
+       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW, ICON_TIDY };
 /* Run and Stop sit under Search; Cheat sheet and Settings are pinned to the
  * bottom. Everything before AB_CHEAT stacks from the top. */
-enum { AB_EXPLORER = 0, AB_SEARCH, AB_NEW, AB_RUN, AB_STOP, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
+enum { AB_EXPLORER = 0, AB_SEARCH, AB_NEW, AB_RUN, AB_STOP, AB_TIDY, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
 
 static const int AB_ICON[AB_COUNT] = {
-    ICON_EXPLORER, ICON_SEARCH, ICON_NEW, ICON_PLAY, ICON_STOP, ICON_CHECK, ICON_CHEAT, ICON_GEAR
+    ICON_EXPLORER, ICON_SEARCH, ICON_NEW, ICON_PLAY, ICON_STOP, ICON_TIDY, ICON_CHECK, ICON_CHEAT, ICON_GEAR
 };
 
 /* addToolTipRect keeps no reference to its owner, so these must be literals */
 static NSString *const AB_TIP[AB_COUNT] = {
-    @"Explorer", @"Search", @"New Project", @"Run  ⌘R", @"Stop  ⌘.", @"Check for mistakes", @"Cheat sheet", @"Settings"
+    @"Explorer", @"Search", @"New Project", @"Run  ⌘R", @"Stop  ⌘.", @"Tidy view - click to show the raw code", @"Check for mistakes", @"Cheat sheet", @"Settings"
 };
 
 static int    g_view = AB_EXPLORER;   /* which panel view, or -1 when collapsed */
@@ -278,6 +279,8 @@ static void save_current(void);
 static void check_code(void);
 static void new_project(void);
 static void clear_check(void);
+static NSString *raw_code(void);
+static NSMutableArray<NSValue *> *g_checkLines;   /* the check marks' lines */
 static void stop_code(void);
 static void send_line(void);
 static void console_clear_pending(void);
@@ -350,6 +353,18 @@ static BOOL system_is_dark(void)
 
 /* Kept in the app's defaults, where Windows uses the registry. A theme never
  * picked reads back as 0, which is Follow macOS. */
+/* the tidy view: on unless it was turned off */
+static BOOL g_tidy = YES;
+static BOOL g_tidying;                 /* our own change to the text, not typing */
+#define TIDY_ARROW "\xe2\x80\x94>"   /* —> */
+static void tidy_update(void);
+
+static void load_tidy(void)
+{
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    g_tidy = [d objectForKey:@"TidyView"] ? [d boolForKey:@"TidyView"] : YES;
+}
+
 static void load_pick(void)
 {
     NSInteger v = [NSUserDefaults.standardUserDefaults integerForKey:@"Theme"];
@@ -609,6 +624,20 @@ static void draw_icon(NSRect box, int kind, unsigned fgc, unsigned bgc)
         ink(shape(b, folder, 6, YES), stroke, fg, bg, YES);
         ink(shape(b, v, 2, NO), stroke, fg, bg, NO);
         ink(shape(b, h, 2, NO), stroke, fg, bg, NO);
+        break;
+    }
+
+    case ICON_TIDY: {
+        /* lines of code, neatly ruled: a short arrow leading each one */
+        static const CGFloat a1[] = { 12,26, 30,26 }, h1[] = { 24,20, 30,26, 24,32 }, l1[] = { 42,26, 88,26 };
+        static const CGFloat a2[] = { 12,50, 30,50 }, h2[] = { 24,44, 30,50, 24,56 }, l2[] = { 42,50, 76,50 };
+        static const CGFloat a3[] = { 12,74, 30,74 }, h3[] = { 24,68, 30,74, 24,80 }, l3[] = { 42,74, 84,74 };
+        ink(shape(b, a1, 2, NO), stroke, fg, bg, NO); ink(shape(b, h1, 3, NO), stroke, fg, bg, NO);
+        ink(shape(b, l1, 2, NO), stroke, fg, bg, NO);
+        ink(shape(b, a2, 2, NO), stroke, fg, bg, NO); ink(shape(b, h2, 3, NO), stroke, fg, bg, NO);
+        ink(shape(b, l2, 2, NO), stroke, fg, bg, NO);
+        ink(shape(b, a3, 2, NO), stroke, fg, bg, NO); ink(shape(b, h3, 3, NO), stroke, fg, bg, NO);
+        ink(shape(b, l3, 2, NO), stroke, fg, bg, NO);
         break;
     }
 
@@ -1017,7 +1046,7 @@ static void run_code(void)
     g_runQueue = nil;
     save_current();                 /* a run is a good moment to keep your work */
     /* the file's own name, so an error says style.adda:3 */
-    start_run(g_code.string, g_curPath ? g_curPath.lastPathComponent : @"program.adda", YES);
+    start_run(raw_code(), g_curPath ? g_curPath.lastPathComponent : @"program.adda", YES);
 }
 
 /* Every program in `dir`: its own files first - first.adda leading - then
@@ -1201,10 +1230,20 @@ static void rescan_files(void)
  * what is typed goes back into that file - when another is opened, before a
  * run, and on quitting - so typing in one never turns up in another. */
 
+/* The code in the editor as it really is: the tidy view is only a way of
+ * showing it, so anything saved, run or checked goes through here. */
+static NSString *raw_code(void)
+{
+    char *raw = tidy_raw(g_code.string.UTF8String, TIDY_ARROW);
+    NSString *s = raw ? [NSString stringWithUTF8String:raw] : nil;
+    free(raw);
+    return s ? s : g_code.string;
+}
+
 static void save_current(void)
 {
     if (!g_curPath || !g_dirty) return;
-    if ([g_code.string writeToFile:g_curPath atomically:YES
+    if ([raw_code() writeToFile:g_curPath atomically:YES
                           encoding:NSUTF8StringEncoding error:NULL])
         g_dirty = NO;
     else
@@ -1235,6 +1274,76 @@ static void close_file(void)
     show_current();
 }
 
+/* UTF-8 byte offset to a character index in `s` */
+static NSUInteger chars_at(const char *utf8, size_t bytes)
+{
+    NSString *head = [[NSString alloc] initWithBytes:utf8 length:bytes encoding:NSUTF8StringEncoding];
+    return head.length;
+}
+
+/* Brings the editor's tidy view up to date: finished named shapes tidied,
+ * the one the caret is in shown raw. Only the display changes - the file,
+ * the undo of what was typed apart, and the dirty flag are left alone. */
+static void tidy_update(void)
+{
+    NSString *text = g_code.string;
+    const char *utf8;
+    TidyEdit ed[128];
+    NSUInteger caret, caretLine = 0, caretCol, i, lineStart = 0;
+    NSTextStorage *ts = g_code.textStorage;
+    int n, k;
+
+    if (g_tidying || !g_code) return;
+    /* while the check marks are up the text must stay as they were made on */
+    if (g_tidy && g_checkLines.count) return;
+
+    caret = g_code.selectedRange.location;
+    for (i = 0; i < caret && i < text.length; i++)
+        if ([text characterAtIndex:i] == '\n') { caretLine++; lineStart = i + 1; }
+    caretCol = caret - lineStart;
+
+    utf8 = text.UTF8String;
+    n = tidy_edits(utf8, TIDY_ARROW, g_code.window.firstResponder == g_code ? (long)caretLine : -1,
+                   g_tidy, ed, 128);
+    if (!n) return;
+
+    g_tidying = YES;
+    [ts beginEditing];
+    for (k = n - 1; k >= 0; k--) {
+        NSUInteger from = chars_at(utf8, ed[k].start);
+        NSUInteger to = chars_at(utf8, ed[k].start + ed[k].len);
+        [ts replaceCharactersInRange:NSMakeRange(from, to - from)
+                withAttributedString:[[NSAttributedString alloc]
+                    initWithString:@(ed[k].with) attributes:g_code.typingAttributes]];
+    }
+    [ts endEditing];
+    tidy_free_edits(ed, n);
+
+    /* the same line and, as near as it can be, the same place on it: the
+     * change never adds or removes a line */
+    text = g_code.string;
+    lineStart = 0;
+    for (i = 0; i < text.length && caretLine; i++)
+        if ([text characterAtIndex:i] == '\n') { caretLine--; lineStart = i + 1; }
+    for (i = lineStart; i < text.length && [text characterAtIndex:i] != '\n'; i++) {}
+    if (caretCol > i - lineStart) caretCol = i - lineStart;
+    g_code.selectedRange = NSMakeRange(lineStart + caretCol, 0);
+
+    /* an undo step would restore text that is no longer on screen */
+    [g_code.undoManager removeAllActions];
+    g_codeScroll.verticalRulerView.needsDisplay = YES;
+    g_tidying = NO;
+}
+
+static void toggle_tidy(void)
+{
+    g_tidy = !g_tidy;
+    [NSUserDefaults.standardUserDefaults setBool:g_tidy forKey:@"TidyView"];
+    if (g_tidy) clear_check();       /* the marks were holding it back */
+    tidy_update();
+    g_main.needsDisplay = YES;
+}
+
 static void open_file(NSString *path)
 {
     NSData *data;
@@ -1254,6 +1363,7 @@ static void open_file(NSString *path)
     g_code.string = text;
     g_curPath = path;
     g_dirty = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{ tidy_update(); });
     show_current();
     g_codeScroll.verticalRulerView.needsDisplay = YES;
     clear_check();
@@ -1551,7 +1661,7 @@ static void save_as(void)
     [panel beginSheetModalForWindow:g_win completionHandler:^(NSModalResponse r) {
         NSError *err = nil;
         if (r != NSModalResponseOK) return;
-        if (![g_code.string writeToURL:panel.URL atomically:YES
+        if (![raw_code() writeToURL:panel.URL atomically:YES
                               encoding:NSUTF8StringEncoding error:&err]) {
             warn(@"The Mac would not save the file there.\n"
                  @"It may be locked, or in a folder you cannot change.");
@@ -1768,13 +1878,14 @@ static void layout(void)
 
     /* activity bar slots */
     top = 8;
-    for (i = 0; i < AB_CHECK; i++) {
+    for (i = 0; i < AB_TIDY; i++) {
         g_abRect[i] = NSMakeRect(0, top, abW, 44);
         top += 44 + (i == AB_SEARCH ? 6 : 0);
     }
     g_abRect[AB_GEAR]  = NSMakeRect(0, H - 8 - 44, abW, 44);
     g_abRect[AB_CHEAT] = NSMakeRect(0, H - 8 - 88, abW, 44);
     g_abRect[AB_CHECK] = NSMakeRect(0, H - 8 - 132, abW, 44);
+    g_abRect[AB_TIDY]  = NSMakeRect(0, H - 8 - 176, abW, 44);
 
     g_panelRect = NSMakeRect(abW, 0, panelW, H);
 
@@ -1855,7 +1966,7 @@ static void paint_main(void)
 
     for (i = 0; i < AB_COUNT; i++) {
         NSRect box = g_abRect[i];
-        BOOL active = (i == g_view);
+        BOOL active = (i == g_view) || (i == AB_TIDY && g_tidy);   /* lit while it is on */
         /* Run only makes sense while idle, Stop only while running */
         BOOL disabled = (i == AB_RUN && g_running) || (i == AB_STOP && !g_running);
         double glow = disabled ? 0 : g_abGlow[i];
@@ -2233,6 +2344,9 @@ static void ab_click(int item)
     case AB_STOP:
         stop_code();
         break;
+    case AB_TIDY:
+        toggle_tidy();
+        break;
     case AB_CHECK:
         check_code();
         break;
@@ -2322,6 +2436,15 @@ static void build_window(void)
                         ln.needsDisplay = YES;
                         g_dirty = YES;       /* belongs to the open file now */
                         clear_check();       /* the marks no longer line up */
+                        dispatch_async(dispatch_get_main_queue(), ^{ tidy_update(); });
+                    }];
+        /* moving onto a tidy line shows it raw; moving off tidies it again */
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSTextViewDidChangeSelectionNotification object:g_code queue:nil
+                    usingBlock:^(NSNotification *n) {
+                        (void)n;
+                        if (!g_tidying)
+                            dispatch_async(dispatch_get_main_queue(), ^{ tidy_update(); });
                     }];
     }
 
@@ -2915,7 +3038,6 @@ static void press(int kind, int idx)
 #define CHECK_LINE  0xFFE066u         /* the whole line with a mistake */
 #define CHECK_SPOT  0xE5484Du         /* the exact thing that is wrong */
 
-static NSMutableArray<NSValue *> *g_checkLines;   /* character ranges */
 
 static void clear_check(void)
 {
@@ -2946,7 +3068,7 @@ static NSUInteger chars_for_bytes(NSString *line, int bytes)
 static void check_code(void)
 {
     NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"_adda_check.adda"];
-    NSString *code = g_code.string, *out;
+    NSString *code, *out;
     NSArray<NSString *> *lines;
     NSMutableString *report = [NSMutableString string];
     NSLayoutManager *lm = g_code.layoutManager;
@@ -2957,6 +3079,14 @@ static void check_code(void)
 
     clear_check();
     if (!g_checkLines) g_checkLines = [NSMutableArray array];
+
+    /* the marks go on the raw code, so show it; tidy view waits until they go */
+    if (g_tidy) {
+        g_tidy = NO;
+        tidy_update();
+        g_tidy = YES;
+    }
+    code = g_code.string;
 
     if (![code writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:NULL])
         return;
@@ -3210,6 +3340,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     g_inq = [NSMutableData data];
     g_treeCache = [NSMutableDictionary dictionary];
     load_pick();
+    load_tidy();
     build_fonts();
     g_t = theme_for(g_pick);
     build_menu();
