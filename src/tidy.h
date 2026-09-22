@@ -7,6 +7,8 @@
  *   function - input box                     function ——> input box
  *   end                                      end
  *
+ *   print hello                              print ——> hello
+ *
  *   delay - 500                              delay ——> 500
  *       print hello                      =>  └─>print hello
  *   end                                      end

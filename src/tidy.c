@@ -140,6 +140,46 @@ static bool end_line(const char *s, const char *e)
 
 /* ──────────────────────────────────────── one line, either way ── */
 
+/* print hello  <->  print ——> hello, after any indent (and a delay's branch,
+ * when `branch` is given). NULL when the line is not a print with something
+ * after it, or is already as asked. */
+static char *print_line(const char *s, const char *e, const char *arrow, const char *branch,
+                        bool to_tidy)
+{
+    const char *p = skip_sp(s, e), *r;
+    Buf o = { NULL, 0, 0 };
+    bool isTidy;
+
+    e = trim_back(s, e);
+    if (branch && starts(p, e, branch)) p = skip_sp(p + strlen(branch), e);
+    if (!starts(p, e, "print") || p + 5 == e || (p[5] != ' ' && p[5] != '\t')) return NULL;
+    r = skip_sp(p + 5, e);
+    if (r == e) return NULL;
+    isTidy = starts(r, e, arrow);
+    if (isTidy == to_tidy) return NULL;
+    if (isTidy) {
+        r = skip_sp(r + strlen(arrow), e);
+        if (r == e) return NULL;
+    }
+    put(&o, s, (size_t)(p + 5 - s));                    /* indent, branch and "print" */
+    puts_(&o, " ");
+    if (to_tidy) { puts_(&o, arrow); puts_(&o, " "); }
+    put(&o, r, (size_t)(e - r));
+    return done(&o);
+}
+
+/* `line` (malloc'd, or NULL for the line s..e as it is) with its print done
+ * as well; NULL when nothing changes at all */
+static char *and_print(char *line, const char *s, const char *e, const char *arrow,
+                       const char *branch, bool to_tidy)
+{
+    const char *from = line ? line : s, *to = line ? line + strlen(line) : e;
+    char *c = print_line(from, to, arrow, branch, to_tidy);
+    if (!c) return line;
+    free(line);
+    return c;
+}
+
 /* A line inside a block, tidied (to_tidy) or turned back to raw. NULL when
  * it stays as it is - an end, a comment, a blank, or anything unusual. */
 static char *convert(const char *s, const char *e, const char *arrow, bool to_tidy)
@@ -197,6 +237,12 @@ static char *convert(const char *s, const char *e, const char *arrow, bool to_ti
         else puts_(&o, " = ");
         put(&o, r, (size_t)(e - r));
         return done(&o);
+    }
+
+    /* print hello   <->   print ——> hello (a hint, or words in the shape) */
+    if (starts(p, e, "print")) {
+        free(o.b);
+        return print_line(s, e, arrow, NULL, to_tidy);
     }
 
     /* function - input box   <->   function ——> input box */
@@ -439,6 +485,7 @@ static char *convert_delay(Line *ls, int i, int j, const char *arrow, const char
         char *c = k == i ? convert_delay_line(ls[k].s, ls[k].e, arrow, tidyThis)
                          : convert_delay_inner(ls[k].s, ls[k].e, ls[i].s, indent, branch,
                                                tidyThis, k == j);
+        if (k != i && k != j) c = and_print(c, ls[k].s, ls[k].e, arrow, branch, tidyThis);
         if (c && k == caretLine && to_tidy) { free(c); c = NULL; }   /* the caret's line waits */
         if (c) { puts_(&o, c); free(c); }
         else put(&o, ls[k].s, (size_t)(ls[k].e - ls[k].s));
@@ -533,8 +580,14 @@ int tidy_edits(const char *text, const char *arrow, const char *branch, long car
             continue;
         }
 
-        add_edit(out, &count, text, ls[i].s, (size_t)(ls[i].e - ls[i].s),
-                 convert_stray(ls[i].s, ls[i].e, arrow, branch));
+        /* any other line: a stray branch goes, and print gets its arrow - but
+         * the caret's own line is left as it is being typed */
+        {
+            char *c = convert_stray(ls[i].s, ls[i].e, arrow, branch);
+            if (!on) c = and_print(c, ls[i].s, ls[i].e, arrow, NULL, false);
+            else if (i != caretLine) c = and_print(c, ls[i].s, ls[i].e, arrow, NULL, true);
+            add_edit(out, &count, text, ls[i].s, (size_t)(ls[i].e - ls[i].s), c);
+        }
         i++;
     }
     free(ls);
