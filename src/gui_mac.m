@@ -31,6 +31,7 @@
 #import <Cocoa/Cocoa.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "tidy.h"
+#include "colour.h"
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -279,6 +280,7 @@ static void save_current(void);
 static void check_code(void);
 static void new_project(void);
 static void clear_check(void);
+static void colour_code(void);
 static NSString *raw_code(void);
 static NSMutableArray<NSValue *> *g_checkLines;   /* the check marks' lines */
 static void stop_code(void);
@@ -411,6 +413,59 @@ static void style_text(NSTextView *tv)
                                    NSForegroundColorAttributeName: col(g_t.text) };
 }
 
+/* The colour for each kind of piece of code, in the theme's light or dark
+ * set - the dark one after VS Code's, which Abyss is too. */
+static NSColor *code_colour(ColourKind k)
+{
+    static const unsigned DARK[COL_KINDS]  = { 0x569CD6, 0xC586C0, 0x9CDCFE, 0xB5CEA8,
+                                               0xCE9178, 0x6A9955, 0 };
+    static const unsigned LIGHT[COL_KINDS] = { 0x0000FF, 0xAF00DB, 0x001080, 0x098658,
+                                               0xA31515, 0x008000, 0 };
+    if (k == COL_PUNCT) return col(g_t.muted);
+    return col(g_t.dark ? DARK[k] : LIGHT[k]);
+}
+
+/* Colours the code in the editor. The colours sit on top of the text rather
+ * than in it, so the file, the tidy view and undo never see them. The check
+ * marks, when they are up, are laid on afterwards and win. */
+static void colour_code(void)
+{
+    NSLayoutManager *lm = g_code.layoutManager;
+    NSString *text = g_code.string;
+    const char *utf8, *p;
+    ColourSpan *sp;
+    NSUInteger at = 0;          /* the character index of p */
+    int n, i, cap = 4096;
+
+    /* while the check marks are up they own the text colours; clear_check
+     * puts these back when they go */
+    if (!lm || !text.length || g_checkLines.count) return;
+    [lm removeTemporaryAttribute:NSForegroundColorAttributeName
+               forCharacterRange:NSMakeRange(0, text.length)];
+
+    sp = malloc(sizeof *sp * (size_t)cap);
+    if (!sp) return;
+    utf8 = text.UTF8String;
+    n = colour_spans(utf8, sp, cap);
+
+    /* byte offsets to character ones, walking once: a four-byte character is
+     * two in an NSString, every other character one */
+    p = utf8;
+    for (i = 0; i < n; i++) {
+        const char *s0 = utf8 + sp[i].start, *s1 = s0 + sp[i].len;
+        NSUInteger from;
+        for (; p < s0; p++)
+            if (((unsigned char)*p & 0xC0) != 0x80) at += ((unsigned char)*p >= 0xF0) ? 2 : 1;
+        from = at;
+        for (; p < s1; p++)
+            if (((unsigned char)*p & 0xC0) != 0x80) at += ((unsigned char)*p >= 0xF0) ? 2 : 1;
+        if (at > from && at <= text.length)
+            [lm addTemporaryAttribute:NSForegroundColorAttributeName value:code_colour(sp[i].kind)
+                    forCharacterRange:NSMakeRange(from, at - from)];
+    }
+    free(sp);
+}
+
 static void reload_quietly(NSTableView *tv)
 {
     g_quiet = YES;
@@ -440,6 +495,7 @@ static void apply_theme(void)
 
     style_text(g_code);
     style_text(g_console);
+    colour_code();
     g_codeScroll.verticalRulerView.needsDisplay = YES;
 
     g_find.textColor = col(g_t.text);
@@ -1296,6 +1352,7 @@ static void tidy_update(void)
     if (g_tidying || !g_code) return;
     /* while the check marks are up the text must stay as they were made on */
     if (g_tidy && g_checkLines.count) return;
+    colour_code();                   /* this runs after every edit and caret move */
 
     caret = g_code.selectedRange.location;
     for (i = 0; i < caret && i < text.length; i++)
@@ -1333,6 +1390,7 @@ static void tidy_update(void)
     [g_code.undoManager removeAllActions];
     g_codeScroll.verticalRulerView.needsDisplay = YES;
     g_tidying = NO;
+    colour_code();                   /* the new lines need their colours */
 }
 
 static void toggle_tidy(void)
@@ -3048,6 +3106,7 @@ static void clear_check(void)
                forCharacterRange:NSMakeRange(0, g_code.string.length)];
     [lm removeTemporaryAttribute:NSForegroundColorAttributeName
                forCharacterRange:NSMakeRange(0, g_code.string.length)];
+    colour_code();                   /* the colours the marks were covering */
     g_code.needsDisplay = YES;
 }
 

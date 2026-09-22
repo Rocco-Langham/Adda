@@ -43,6 +43,7 @@
 
 #include "gui_cheatsheet.h"
 #include "tidy.h"
+#include "colour.h"
 
 /* ── ids ─────────────────────────────────────────────────────────── */
 #define ID_CODE      1001
@@ -2042,6 +2043,8 @@ static void tidy_update(void)
     g_tidying = FALSE;
 }
 
+static void paint_colours(HWND h);
+
 static void toggle_tidy(HWND hwnd)
 {
     g_tidy = !g_tidy;
@@ -2149,6 +2152,82 @@ static int char_x(HWND h, int i)
 {
     LRESULT r = SendMessageA(h, EM_POSFROMCHAR, (WPARAM)i, 0);
     return (short)LOWORD(r);
+}
+
+/* The colour for each kind of piece of code, in the theme's light or dark
+ * set - the dark one after VS Code's, which Abyss is too. */
+static COLORREF code_colour(ColourKind k)
+{
+    static const unsigned DARK[COL_KINDS]  = { 0x569CD6, 0xC586C0, 0x9CDCFE, 0xB5CEA8,
+                                               0xCE9178, 0x6A9955, 0 };
+    static const unsigned LIGHT[COL_KINDS] = { 0x0000FF, 0xAF00DB, 0x001080, 0x098658,
+                                               0xA31515, 0x008000, 0 };
+    unsigned c;
+    if (k == COL_PUNCT) return g_t.muted;
+    c = g_t.dark ? DARK[k] : LIGHT[k];
+    return RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+}
+
+/* Colours the code. The EDIT control draws everything in one colour, so the
+ * coloured pieces are drawn again on top, a character at a time where the
+ * control put them - skipping the selection, which it highlights itself. */
+static void paint_colours(HWND h)
+{
+    RECT rc;
+    HDC dc;
+    HGDIOBJ oldFont;
+    TEXTMETRICA tm;
+    int len, first, last, lineH, n, k;
+    DWORD selA = 0, selB = 0;
+    char *text;
+    ColourSpan *sp;
+
+    len = GetWindowTextLengthA(h);
+    if (!len) return;
+    text = malloc((size_t)len + 1);
+    sp = malloc(sizeof *sp * 4096);
+    if (!text || !sp) { free(text); free(sp); return; }
+    GetWindowTextA(h, text, len + 1);
+    n = colour_spans(text, sp, 4096);
+    SendMessageA(h, EM_GETSEL, (WPARAM)&selA, (LPARAM)&selB);
+
+    GetClientRect(h, &rc);
+    dc = GetDC(h);
+    oldFont = SelectObject(dc, hFontMono);
+    GetTextMetricsA(dc, &tm);
+    lineH = tm.tmHeight ? tm.tmHeight : 1;
+
+    /* only what can be seen: from the first visible row to just past the last */
+    first = (int)SendMessageA(h, EM_LINEINDEX,
+                              (WPARAM)SendMessageA(h, EM_GETFIRSTVISIBLELINE, 0, 0), 0);
+    last = (int)SendMessageA(h, EM_LINEINDEX,
+                             (WPARAM)(SendMessageA(h, EM_GETFIRSTVISIBLELINE, 0, 0) +
+                                      rc.bottom / lineH + 1), 0);
+    if (last < 0 || last > len) last = len;
+
+    HideCaret(h);
+    SetBkMode(dc, OPAQUE);
+    SetBkColor(dc, g_t.surface);
+    for (k = 0; k < n; k++) {
+        int i, from = (int)sp[k].start, to = (int)(sp[k].start + sp[k].len);
+        if (to <= first || from >= last) continue;
+        SetTextColor(dc, code_colour(sp[k].kind));
+        for (i = from < first ? first : from; i < to && i < last; i++) {
+            LRESULT pos;
+            if ((DWORD)i >= selA && (DWORD)i < selB) continue;   /* highlighted already */
+            if (text[i] == '\r' || text[i] == '\n' || text[i] == '\t') continue;
+            pos = SendMessageA(h, EM_POSFROMCHAR, (WPARAM)i, 0);
+            if (pos == -1) continue;
+            if ((short)LOWORD(pos) < GUTTER_W) continue;          /* scrolled under the numbers */
+            TextOutA(dc, (short)LOWORD(pos), (short)HIWORD(pos), text + i, 1);
+        }
+    }
+    ShowCaret(h);
+
+    SelectObject(dc, oldFont);
+    ReleaseDC(h, dc);
+    free(sp);
+    free(text);
 }
 
 /* Paints over the edit control's own drawing: each row of a line with a
@@ -2298,6 +2377,7 @@ static LRESULT CALLBACK CodeProc(HWND h, UINT msg, WPARAM w, LPARAM l,
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(h, CodeProc, 0);
     res = DefSubclassProc(h, msg, w, l);
     if (msg == WM_PAINT) {
+        paint_colours(h);           /* first, so the check marks are drawn over it */
         paint_check(h);
         paint_gutter(h);
     }
@@ -3657,6 +3737,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_TIDY:
         tidy_update();
+        /* the EDIT redraws a line it has just changed in its one colour, not
+         * through WM_PAINT, so the colours go back on here too */
+        if (hwndCode) paint_colours(hwndCode);
         return 0;
 
     case WM_SETCURSOR: {

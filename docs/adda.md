@@ -576,6 +576,12 @@ name. Each file is a program of its own, so a variable set in one is not there
 in the next, and a mistake in one file does not stop the others. Stop ends the
 whole run.
 
+The code box colours your code as you type: keywords like `print`, `if` and
+`end`, variables like `[name]`, numbers, `true`/`false`/`nothing`, quoted text
+and `# comments` each have their own colour, which follows the theme. A word is
+only coloured as a keyword where it really acts as one, so the `and` in
+`print Tom and Jo` stays plain text.
+
 Drag the divider between the code and the console to give either one more room,
 or double-click it to split them evenly. **F11** goes full screen.
 
