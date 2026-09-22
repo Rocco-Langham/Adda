@@ -168,6 +168,73 @@ static char *print_line(const char *s, const char *e, const char *arrow, const c
     return done(&o);
 }
 
+/* [age] = ask Hello  <->  age ——> ask ——> Hello, after any indent (and a
+ * delay's branch, when `branch` is given). Only a plain [name] = ... line;
+ * an ask keeps its own arrow before the question. NULL: unchanged. */
+static char *assign_line(const char *s, const char *e, const char *arrow, const char *branch,
+                         bool to_tidy)
+{
+    const char *p = skip_sp(s, e), *nm, *nme, *r;
+    Buf o = { NULL, 0, 0 };
+
+    e = trim_back(s, e);
+    if (branch && starts(p, e, branch)) p = skip_sp(p + strlen(branch), e);
+
+    if (to_tidy) {                                   /* [name] = value */
+        if (p >= e || *p != '[') return NULL;
+        nm = p + 1;
+        nme = name_end(nm, e);
+        if (nme == nm || nme >= e || *nme != ']') return NULL;
+        r = skip_sp(nme + 1, e);
+        if (r >= e || *r != '=') return NULL;
+        r = skip_sp(r + 1, e);
+        if (r == e || starts(r, e, arrow)) return NULL;
+    } else {                                         /* name ——> value */
+        static const char *const not_names[] = {     /* other lines with an arrow */
+            "name", "height", "width", "function", "delay", "openApplication",
+            "print", "text", "insert", "title", "colour", "color", NULL
+        };
+        int k;
+        nm = p;
+        nme = name_end(nm, e);
+        if (nme == nm) return NULL;
+        for (k = 0; not_names[k]; k++)
+            if (word_at(nm, nme, not_names[k])) return NULL;
+        r = skip_sp(nme, e);
+        if (!starts(r, e, arrow)) return NULL;
+        r = skip_sp(r + strlen(arrow), e);
+        if (r == e) return NULL;
+    }
+
+    put(&o, s, (size_t)(p - s));                     /* the indent, and any branch */
+    if (to_tidy) {
+        put(&o, nm, (size_t)(nme - nm));
+        puts_(&o, " ");
+        puts_(&o, arrow);
+        puts_(&o, " ");
+    } else {
+        puts_(&o, "[");
+        put(&o, nm, (size_t)(nme - nm));
+        puts_(&o, "] = ");
+    }
+
+    /* ask Hello  <->  ask ——> Hello */
+    if (word_at(r, e, "ask")) {
+        const char *q = skip_sp(r + 3, e);
+        bool asked = starts(q, e, arrow);
+        if (q < e && asked != to_tidy) {
+            if (asked) q = skip_sp(q + strlen(arrow), e);
+            put(&o, r, 3);
+            puts_(&o, " ");
+            if (to_tidy && q < e) { puts_(&o, arrow); puts_(&o, " "); }
+            put(&o, q, (size_t)(e - q));
+            return done(&o);
+        }
+    }
+    put(&o, r, (size_t)(e - r));
+    return done(&o);
+}
+
 /* `line` (malloc'd, or NULL for the line s..e as it is) with its print done
  * as well; NULL when nothing changes at all */
 static char *and_print(char *line, const char *s, const char *e, const char *arrow,
@@ -175,6 +242,7 @@ static char *and_print(char *line, const char *s, const char *e, const char *arr
 {
     const char *from = line ? line : s, *to = line ? line + strlen(line) : e;
     char *c = print_line(from, to, arrow, branch, to_tidy);
+    if (!c) c = assign_line(from, to, arrow, branch, to_tidy);
     if (!c) return line;
     free(line);
     return c;
@@ -308,6 +376,12 @@ static char *convert(const char *s, const char *e, const char *arrow, bool to_ti
             }
             return done(&o);
         }
+    }
+
+    /* [age] = ask Hello   <->   age ——> ask ——> Hello */
+    {
+        char *c = assign_line(s, e, arrow, NULL, to_tidy);
+        if (c) { free(o.b); return c; }
     }
 
     free(o.b);

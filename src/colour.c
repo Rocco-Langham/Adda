@@ -84,6 +84,12 @@ static size_t arrow_at(const char *p, const char *e)
            ? (size_t)(q + 1 - p) : 0;
 }
 
+static const char *skip_blanks(const char *p, const char *e)
+{
+    while (p < e && (*p == ' ' || *p == '\t')) p++;
+    return p;
+}
+
 static void colour_line(Spans *s, const char *base, const char *p, const char *e)
 {
     const char *q = p;
@@ -135,8 +141,14 @@ static void colour_line(Spans *s, const char *base, const char *p, const char *e
 
         {
             size_t a = arrow_at(q, e);
-            /* in the tidy view an arrow stands where a ; did */
-            if (a) { add(s, base, q, a, COL_ARROW); q += a; afterSemi = true; continue; }
+            /* in the tidy view an arrow stands where a ; or an = did */
+            if (a) {
+                add(s, base, q, a, COL_ARROW);
+                q += a;
+                afterSemi = true;
+                valueNext = true;
+                continue;
+            }
         }
 
         if (*q == '{' || *q == '}' || *q == '(' || *q == ')' || *q == ',' || *q == ';' || *q == '=') {
@@ -161,6 +173,15 @@ static void colour_line(Spans *s, const char *base, const char *p, const char *e
         if (words == 0) {
             first = w;
             firstLen = n;
+            if (!one_of(w, n, STATEMENTS) && !is_number(w, n) &&
+                (isalpha((unsigned char)*w) || *w == '_')) {   /* age ——>: the tidy [age] */
+                const char *r = skip_blanks(q, e);
+                if (arrow_at(r, e)) {
+                    add(s, base, w, n, COL_VARIABLE);
+                    words++;
+                    continue;
+                }
+            }
             if (one_of(w, n, STATEMENTS)) {
                 add(s, base, w, n, COL_KEYWORD);
                 test = is_word(w, n, "if") || is_word(w, n, "while");

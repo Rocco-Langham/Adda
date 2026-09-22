@@ -8,6 +8,7 @@
  *   end                                      end
  *
  *   print hello                              print ——> hello
+ *   [age] = ask Hello                        age ——> ask ——> Hello
  *
  *   delay - 500                              delay ——> 500
  *       print hello                      =>  └─>print hello
