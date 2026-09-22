@@ -16,7 +16,8 @@ typedef enum {
     COL_NUMBER,        /* 30, 2.5, 15px */
     COL_STRING,        /* "quoted text" */
     COL_COMMENT,       /* # to the end of the line */
-    COL_PUNCT,         /* { } ( ) = , ; and the tidy view's arrows */
+    COL_PUNCT,         /* { } ( ) = , ; */
+    COL_ARROW,         /* the tidy view's arrows, -> and the long one: drawn bold */
     COL_KINDS
 } ColourKind;
 

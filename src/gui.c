@@ -143,7 +143,7 @@ static HWND  hwndSettings, hwndCheats;
 static HWND  hwndCheatFind, hwndCheatList;
 
 static HBRUSH hBrushBg, hBrushSurface, hBrushAb;
-static HFONT  hFontMono, hFontUI, hFontUIBold, hFontSmall;
+static HFONT  hFontMono, hFontMonoBold, hFontUI, hFontUIBold, hFontSmall;
 static HFONT  hFontTitle, hFontBody;      /* a cheat sheet entry's own page */
 static int    g_dpi = 96;
 
@@ -420,6 +420,7 @@ static HFONT make_font(int points, int weight, const char *face)
 static void build_fonts(void)
 {
     if (hFontMono)   DeleteObject(hFontMono);
+    if (hFontMonoBold) DeleteObject(hFontMonoBold);
     if (hFontUI)     DeleteObject(hFontUI);
     if (hFontUIBold) DeleteObject(hFontUIBold);
     if (hFontSmall)  DeleteObject(hFontSmall);
@@ -428,7 +429,9 @@ static void build_fonts(void)
 
     hFontTitle  = make_font(14, FW_SEMIBOLD, "Segoe UI");
     hFontBody   = make_font(10, FW_NORMAL,   "Segoe UI");
-    hFontMono   = make_font(11, FW_NORMAL,   "Consolas");
+    /* the code and the console: a little bigger than the rest, to read easily */
+    hFontMono   = make_font(13, FW_NORMAL,   "Consolas");
+    hFontMonoBold = make_font(13, FW_BOLD,   "Consolas");   /* the tidy view's arrows */
     hFontUI     = make_font(9,  FW_NORMAL,   "Segoe UI");
     hFontUIBold = make_font(9,  FW_SEMIBOLD, "Segoe UI");
     hFontSmall  = make_font(8,  FW_NORMAL,   "Segoe UI");
@@ -2189,13 +2192,16 @@ static COLORREF code_colour(ColourKind k)
                                                0xA31515, 0x008000, 0 };
     unsigned c;
     if (k == COL_PUNCT) return g_t.muted;
+    if (k == COL_ARROW) return g_t.text;              /* bold, so it stands out anyway */
     c = g_t.dark ? DARK[k] : LIGHT[k];
     return RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
 }
 
 /* Colours the code. The EDIT control draws everything in one colour, so the
  * coloured pieces are drawn again on top, a character at a time where the
- * control put them - skipping the selection, which it highlights itself. */
+ * control put them - skipping the selection, which it highlights itself. The
+ * tidy view's arrows are drawn bold, whether or not the code is coloured; the
+ * font is fixed width, so a bold character fills exactly the same space. */
 static void paint_colours(HWND h)
 {
     RECT rc;
@@ -2207,7 +2213,6 @@ static void paint_colours(HWND h)
     char *text;
     ColourSpan *sp;
 
-    if (!g_colours) return;           /* turned off in Settings: all one colour */
     len = GetWindowTextLengthA(h);
     if (!len) return;
     text = malloc((size_t)len + 1);
@@ -2237,6 +2242,8 @@ static void paint_colours(HWND h)
     for (k = 0; k < n; k++) {
         int i, from = (int)sp[k].start, to = (int)(sp[k].start + sp[k].len);
         if (to <= first || from >= last) continue;
+        if (!g_colours && sp[k].kind != COL_ARROW) continue;   /* colouring turned off */
+        SelectObject(dc, sp[k].kind == COL_ARROW ? hFontMonoBold : hFontMono);
         SetTextColor(dc, code_colour(sp[k].kind));
         for (i = from < first ? first : from; i < to && i < last; i++) {
             LRESULT pos;
@@ -4072,6 +4079,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         DeleteObject(hBrushSurface);
         DeleteObject(hBrushAb);
         DeleteObject(hFontMono);
+        DeleteObject(hFontMonoBold);
         DeleteObject(hFontUI);
         DeleteObject(hFontUIBold);
         DeleteObject(hFontSmall);

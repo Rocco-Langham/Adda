@@ -188,7 +188,7 @@ static NSTextField  *g_cheatFind;
 static CheatTable   *g_cheatList;
 static Adda         *g_adda;
 
-static NSFont *g_fontMono, *g_fontUI, *g_fontUIBold, *g_fontSmall;
+static NSFont *g_fontMono, *g_fontMonoBold, *g_fontUI, *g_fontUIBold, *g_fontSmall;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR, ICON_PLUS,
@@ -431,7 +431,41 @@ static NSColor *code_colour(ColourKind k)
     static const unsigned LIGHT[COL_KINDS] = { 0x0000FF, 0xAF00DB, 0x001080, 0x098658,
                                                0xA31515, 0x008000, 0 };
     if (k == COL_PUNCT) return col(g_t.muted);
+    if (k == COL_ARROW) return col(g_t.text);          /* bold, so it stands out anyway */
     return col(g_t.dark ? DARK[k] : LIGHT[k]);
+}
+
+/* The tidy view's arrows in bold. A font cannot be laid on top the way a
+ * colour can, so this sets it on the text's own attributes - which the file,
+ * being only the characters, never sees. It happens whether or not the code
+ * is coloured. */
+static void bold_arrows(void)
+{
+    NSTextStorage *ts = g_code.textStorage;
+    NSString *text = g_code.string;
+    const char *utf8, *p;
+    ColourSpan sp[512];
+    NSUInteger at = 0;
+    int n, i;
+
+    if (!ts || !text.length) return;
+    utf8 = text.UTF8String;
+    n = colour_spans(utf8, sp, 512);
+    [ts beginEditing];
+    [ts addAttribute:NSFontAttributeName value:g_fontMono range:NSMakeRange(0, text.length)];
+    p = utf8;
+    for (i = 0; i < n; i++) {
+        const char *s0 = utf8 + sp[i].start, *s1 = s0 + sp[i].len;
+        NSUInteger from;
+        for (; p < s0; p++)
+            if (((unsigned char)*p & 0xC0) != 0x80) at += ((unsigned char)*p >= 0xF0) ? 2 : 1;
+        from = at;
+        for (; p < s1; p++)
+            if (((unsigned char)*p & 0xC0) != 0x80) at += ((unsigned char)*p >= 0xF0) ? 2 : 1;
+        if (sp[i].kind == COL_ARROW && at > from && at <= text.length)
+            [ts addAttribute:NSFontAttributeName value:g_fontMonoBold range:NSMakeRange(from, at - from)];
+    }
+    [ts endEditing];
 }
 
 /* Colours the code in the editor. The colours sit on top of the text rather
@@ -446,6 +480,7 @@ static void colour_code(void)
     NSUInteger at = 0;          /* the character index of p */
     int n, i, cap = 4096;
 
+    bold_arrows();
     /* while the check marks are up they own the text colours; clear_check
      * puts these back when they go */
     if (!lm || !text.length || g_checkLines.count) return;
@@ -532,7 +567,9 @@ static void apply_theme(void)
 
 static void build_fonts(void)
 {
-    g_fontMono   = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
+    /* the code and the console: a little bigger than the rest, to read easily */
+    g_fontMono   = [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightRegular];
+    g_fontMonoBold = [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightBold];
     g_fontUI     = [NSFont systemFontOfSize:13];
     g_fontUIBold = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
     g_fontSmall  = [NSFont systemFontOfSize:11];

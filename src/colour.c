@@ -125,7 +125,7 @@ static void colour_line(Spans *s, const char *base, const char *p, const char *e
         {
             size_t a = arrow_at(q, e);
             /* in the tidy view an arrow stands where a ; did */
-            if (a) { add(s, base, q, a, COL_PUNCT); q += a; afterSemi = true; continue; }
+            if (a) { add(s, base, q, a, COL_ARROW); q += a; afterSemi = true; continue; }
         }
 
         if (*q == '{' || *q == '}' || *q == '(' || *q == ')' || *q == ',' || *q == ';' || *q == '=') {
