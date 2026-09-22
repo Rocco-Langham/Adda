@@ -76,6 +76,11 @@ static const Cheat CHEAT_TOPICS[] = {
   NULL,
   NULL, 10 },
 
+{ "Fonts ->",
+  "Five fonts on every Mac and every Windows PC",
+  NULL,
+  NULL, 12 },
+
 { "Odds and ends ->",
   "True, false, nothing, and literal braces",
   NULL,
@@ -460,17 +465,54 @@ static const Cheat CHEAT_ODDS[] = {
   "print These are braces: {{ }}", 0 },
 };
 
+/* ---- fonts ---------------------------------------------------------- */
+/* five fonts that come with every Mac and every Windows PC, so a program
+ * looks the same on both */
+static const Cheat CHEAT_FONTS[] = {
+{ "<- Back to all topics",
+  "Click to go back to the list of topics.",
+  NULL,
+  NULL, 0 },
+
+{ "Arial",
+  "Plain and clear, with no little feet on the letters. sans serif, simple, normal, clean",
+  "Draws a rounded box across the top of the window and writes Hello there in it, in Arial at size 24. Arial is plain and easy to read, good for everyday writing.",
+  "insert rounded box; name = [sign]\r\n40px top, left, right\r\nheight = 80px\r\ntext [sign] Hello there; font arial; size 24\r\nend", 0 },
+
+{ "Georgia",
+  "Classic, like a book or a newspaper. serif, book, fancy, old style, times",
+  "Draws a rounded box across the top of the window and writes Once upon a time in it, in Georgia at size 24. Georgia has small feet on its letters, like the writing in a book.",
+  "insert rounded box; name = [sign]\r\n40px top, left, right\r\nheight = 80px\r\ntext [sign] Once upon a time; font georgia; size 24\r\nend", 0 },
+
+{ "Courier New",
+  "Every letter the same width, like a typewriter or code. monospace, typewriter, code, computer, fixed",
+  "Draws a rounded box across the top of the window and writes Score: 100 in it, in Courier New at size 24. Every letter takes up the same space, so it looks like a typewriter or computer code.",
+  "insert rounded box; name = [sign]\r\n40px top, left, right\r\nheight = 80px\r\ntext [sign] Score: 100; font courier new; size 24\r\nend", 0 },
+
+{ "Comic Sans MS",
+  "Friendly, like handwriting in a comic. handwriting, fun, playful, childish, cartoon",
+  "Draws a rounded box across the top of the window and writes Have fun! in it, in Comic Sans MS at size 24. It looks like friendly handwriting, good for fun or playful programs.",
+  "insert rounded box; name = [sign]\r\n40px top, left, right\r\nheight = 80px\r\ntext [sign] Have fun!; font comic sans ms; size 24\r\nend", 0 },
+
+{ "Impact",
+  "Big, bold and squashed - made for headlines. bold, heavy, headline, title, poster, loud",
+  "Draws a rounded box across the top of the window and writes GAME OVER in it, in Impact at size 32. Impact is thick and tall, so it stands out, like a poster or a headline.",
+  "insert rounded box; name = [sign]\r\n40px top, left, right\r\nheight = 80px\r\ntext [sign] GAME OVER; font impact; size 32\r\nend", 0 },
+};
+
 #define CHEAT_N(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
 static const Cheat *const CHEAT_PAGES[] = {
-    CHEAT_TOPICS, CHEAT_THE_BASICS, CHEAT_MATHS, CHEAT_ASKING, CHEAT_CHOOSING, CHEAT_REPEATING, CHEAT_LISTS, CHEAT_MAPS, CHEAT_FUNCTIONS, CHEAT_WINDOWS, CHEAT_SHAPES, CHEAT_ODDS
+    CHEAT_TOPICS, CHEAT_THE_BASICS, CHEAT_MATHS, CHEAT_ASKING, CHEAT_CHOOSING, CHEAT_REPEATING, CHEAT_LISTS, CHEAT_MAPS, CHEAT_FUNCTIONS, CHEAT_WINDOWS, CHEAT_SHAPES, CHEAT_ODDS,
+    CHEAT_FONTS
 };
 static const int CHEAT_PAGE_SIZES[] = {
-    CHEAT_N(CHEAT_TOPICS), CHEAT_N(CHEAT_THE_BASICS), CHEAT_N(CHEAT_MATHS), CHEAT_N(CHEAT_ASKING), CHEAT_N(CHEAT_CHOOSING), CHEAT_N(CHEAT_REPEATING), CHEAT_N(CHEAT_LISTS), CHEAT_N(CHEAT_MAPS), CHEAT_N(CHEAT_FUNCTIONS), CHEAT_N(CHEAT_WINDOWS), CHEAT_N(CHEAT_SHAPES), CHEAT_N(CHEAT_ODDS)
+    CHEAT_N(CHEAT_TOPICS), CHEAT_N(CHEAT_THE_BASICS), CHEAT_N(CHEAT_MATHS), CHEAT_N(CHEAT_ASKING), CHEAT_N(CHEAT_CHOOSING), CHEAT_N(CHEAT_REPEATING), CHEAT_N(CHEAT_LISTS), CHEAT_N(CHEAT_MAPS), CHEAT_N(CHEAT_FUNCTIONS), CHEAT_N(CHEAT_WINDOWS), CHEAT_N(CHEAT_SHAPES), CHEAT_N(CHEAT_ODDS),
+    CHEAT_N(CHEAT_FONTS)
 };
 #define CHEAT_PAGE_COUNT CHEAT_N(CHEAT_PAGES)
 /* room for every entry at once, which a search of all topics can need */
-#define CHEAT_MAX (CHEAT_N(CHEAT_TOPICS) + CHEAT_N(CHEAT_THE_BASICS) + CHEAT_N(CHEAT_MATHS) + CHEAT_N(CHEAT_ASKING) + CHEAT_N(CHEAT_CHOOSING) + CHEAT_N(CHEAT_REPEATING) + CHEAT_N(CHEAT_LISTS) + CHEAT_N(CHEAT_MAPS) + CHEAT_N(CHEAT_FUNCTIONS) + CHEAT_N(CHEAT_WINDOWS) + CHEAT_N(CHEAT_SHAPES) + CHEAT_N(CHEAT_ODDS))
+#define CHEAT_MAX (CHEAT_N(CHEAT_TOPICS) + CHEAT_N(CHEAT_THE_BASICS) + CHEAT_N(CHEAT_MATHS) + CHEAT_N(CHEAT_ASKING) + CHEAT_N(CHEAT_CHOOSING) + CHEAT_N(CHEAT_REPEATING) + CHEAT_N(CHEAT_LISTS) + CHEAT_N(CHEAT_MAPS) + CHEAT_N(CHEAT_FUNCTIONS) + CHEAT_N(CHEAT_WINDOWS) + CHEAT_N(CHEAT_SHAPES) + CHEAT_N(CHEAT_ODDS) + CHEAT_N(CHEAT_FONTS))
 
 /* which page the cheat sheet is showing: 0 is the list of topics */
 static int g_cheatPage;

@@ -312,7 +312,7 @@ optional:
 
 | Setting | What it does |
 |---|---|
-| `font helvetica` | Any font on the computer, in any capitals. Leave it out for the usual one. |
+| `font helvetica` | Any font on the computer, in any capitals. Leave it out for the usual one. Five that every Mac and Windows PC has, so they look the same everywhere: `arial` (plain), `georgia` (like a book), `courier new` (like a typewriter), `comic sans ms` (like handwriting) and `impact` (big and bold). The cheat sheet's **Fonts** topic shows each one. |
 | `size 15` | The size in points (`size15` works too). 15 if you leave it out. |
 | `location top left` | Where in the shape: `left`, `centre`, `right`, `top`, `bottom`, or two together such as `top right` or `bottom-left`. Centre if you leave it out. |
 
