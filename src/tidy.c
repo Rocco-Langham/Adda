@@ -306,7 +306,12 @@ static int block_end(Line *ls, int n, int i, const char *arrow, bool tidy)
 
 /* ─────────────────────────────────────────────────── delay blocks ── */
 
-/* delay - 500, delay 1500, delay - [wait]: not a delay end */
+/* A delay block's tidy view stays up even with the caret in it: the lines
+ * inside show the branch (└─>) in place of their indent, and delay - 1500
+ * shows as delay ——> 1500. Only the line the caret is on is left as it is
+ * typed, so a new line - or an end - can be written in the ordinary way. */
+
+/* delay - 500, delay 1500, delay ——> 500: not a delay end */
 static bool delay_start(const char *s, const char *e)
 {
     const char *p = skip_sp(s, e);
@@ -337,53 +342,108 @@ static bool opens_block(const char *p, const char *e, const char *arrow)
            start_line(p, e, arrow, true, &a, &b, &c, &d);
 }
 
-/* The delay block starting at line i - raw or tidy as `tidy` says - ends at
- * the line returned, or -1 when it is not a finished, simple block. Tidy, each
- * line inside starts with the delay's own indent and then the branch. */
-static int delay_end(Line *ls, int n, int i, const char *arrow, const char *branch, bool tidy)
+/* After the indent, a line's branch - where its code starts, or NULL. */
+static const char *after_branch(const char *s, const char *e, const char *branch)
 {
-    size_t indent, bn = strlen(branch);
+    const char *p = skip_sp(s, e);
+    return starts(p, e, branch) ? skip_sp(p + strlen(branch), e) : NULL;
+}
+
+/* The delay block starting at line i ends at the line returned (its end), or
+ * -1 when it is not a finished, simple block. Its lines may be tidy or not,
+ * in any mix. */
+static int delay_end(Line *ls, int n, int i, const char *arrow, const char *branch)
+{
     int j;
 
     if (!delay_start(ls[i].s, ls[i].e)) return -1;
-    indent = (size_t)(skip_sp(ls[i].s, ls[i].e) - ls[i].s);
     for (j = i + 1; j < n; j++) {
-        const char *s = ls[j].s, *e = ls[j].e, *p = skip_sp(s, e);
-        bool branched = (size_t)(e - s) >= indent + bn &&
-                        memcmp(s, ls[i].s, indent) == 0 && memcmp(s + indent, branch, bn) == 0;
+        const char *s = ls[j].s, *e = ls[j].e, *p = after_branch(s, e, branch);
+        if (!p) p = skip_sp(s, e);
         if (p == e) continue;                               /* a blank line */
-        if (!branched && delay_close(s, e)) return j;
-        if (branched != tidy) return -1;
-        if (branched) p = skip_sp(s + indent + bn, e);
+        if (delay_close(p, e)) return j;
         if (opens_block(p, e, arrow)) return -1;
     }
     return -1;
 }
 
-/* delay lines i .. j-1 tidied or turned back to raw: only the lines inside
- * change - their indent becomes the branch, or the branch four spaces. */
-static char *convert_delay(Line *ls, int i, int j, const char *branch, bool to_tidy)
+/* the delay line itself: delay - 1500 <-> delay ——> 1500. NULL: unchanged */
+static char *convert_delay_line(const char *s, const char *e, const char *arrow, bool to_tidy)
+{
+    const char *p = skip_sp(s, e), *r;
+    Buf o = { NULL, 0, 0 };
+    bool isTidy;
+
+    e = trim_back(s, e);
+    r = skip_sp(p + 5, e);
+    isTidy = starts(r, e, arrow);
+    if (isTidy == to_tidy) return NULL;
+    if (isTidy) r = skip_sp(r + strlen(arrow), e);
+    else if (r < e && *r == '-' && (r + 1 == e || r[1] == ' ' || r[1] == '\t')) r = skip_sp(r + 1, e);
+    if (r == e) return NULL;                                /* no time: leave it */
+    put(&o, s, (size_t)(p + 5 - s));                        /* indent and "delay", as typed */
+    puts_(&o, to_tidy ? " " : " - ");
+    if (to_tidy) { puts_(&o, arrow); puts_(&o, " "); }
+    put(&o, r, (size_t)(e - r));
+    return done(&o);
+}
+
+/* A line inside, tidied or turned back to raw. NULL: unchanged. */
+static char *convert_delay_inner(const char *s, const char *e, const char *indent,
+                                 size_t indentLen, const char *branch, bool to_tidy, bool isEnd)
+{
+    const char *code = after_branch(s, e, branch);
+    Buf o = { NULL, 0, 0 };
+
+    if (skip_sp(s, e) == e) return NULL;                    /* blank */
+    if (to_tidy && !isEnd) {
+        if (code) return NULL;
+        put(&o, indent, indentLen);
+        puts_(&o, branch);
+        code = skip_sp(s, e);
+    } else {
+        if (!code) return NULL;
+        put(&o, indent, indentLen);
+        if (!isEnd) puts_(&o, "    ");                      /* an end goes back under its delay */
+    }
+    put(&o, code, (size_t)(e - code));
+    return done(&o);
+}
+
+/* Delay lines i .. j (its end) as they should be shown; the caret's line is
+ * only ever turned back to raw, never tidied, so typing is not disturbed. */
+static char *convert_delay(Line *ls, int i, int j, const char *arrow, const char *branch,
+                           bool to_tidy, long caretLine)
 {
     Buf o = { NULL, 0, 0 };
-    size_t indent = (size_t)(skip_sp(ls[i].s, ls[i].e) - ls[i].s), bn = strlen(branch);
+    size_t indent = (size_t)(skip_sp(ls[i].s, ls[i].e) - ls[i].s);
     int k;
 
-    for (k = i; k < j; k++) {
-        const char *s = ls[k].s, *e = ls[k].e;
-        if (k == i || skip_sp(s, e) == e) {
-            put(&o, s, (size_t)(e - s));
-        } else if (to_tidy) {
-            put(&o, ls[i].s, indent);
-            puts_(&o, branch);
-            put(&o, skip_sp(s, e), (size_t)(e - skip_sp(s, e)));
-        } else {
-            const char *r = skip_sp(s + indent + bn, e);
-            put(&o, ls[i].s, indent);
-            puts_(&o, "    ");
-            put(&o, r, (size_t)(e - r));
-        }
-        put(&o, e, (size_t)(ls[k].next - e));               /* its \r\n or \n */
+    for (k = i; k <= j; k++) {
+        bool tidyThis = to_tidy && k != caretLine;
+        char *c = k == i ? convert_delay_line(ls[k].s, ls[k].e, arrow, tidyThis)
+                         : convert_delay_inner(ls[k].s, ls[k].e, ls[i].s, indent, branch,
+                                               tidyThis, k == j);
+        if (c && k == caretLine && to_tidy) { free(c); c = NULL; }   /* the caret's line waits */
+        if (c) { puts_(&o, c); free(c); }
+        else put(&o, ls[k].s, (size_t)(ls[k].e - ls[k].s));
+        put(&o, ls[k].e, (size_t)(ls[k].next - ls[k].e));   /* its \r\n or \n */
     }
+    return done(&o);
+}
+
+/* A branched line, or a tidy delay line, that is not in a finished delay any
+ * more (its end was deleted, say): back to raw, so it is never saved tidy. */
+static char *convert_stray(const char *s, const char *e, const char *arrow, const char *branch)
+{
+    const char *code = after_branch(s, e, branch), *p = skip_sp(s, e);
+    Buf o = { NULL, 0, 0 };
+
+    if (delay_start(s, e)) return convert_delay_line(s, e, arrow, false);
+    if (!code) return NULL;
+    put(&o, s, (size_t)(p - s));
+    puts_(&o, "    ");
+    put(&o, code, (size_t)(e - code));
     return done(&o);
 }
 
@@ -402,6 +462,19 @@ static char *convert_lines(Line *ls, int i, int j, const char *arrow, bool to_ti
     return done(&o);
 }
 
+static void add_edit(TidyEdit *out, int *count, const char *text, const char *from,
+                     size_t len, char *with)
+{
+    if (with && (strlen(with) != len || memcmp(with, from, len) != 0)) {
+        out[*count].start = (size_t)(from - text);
+        out[*count].len = len;
+        out[*count].with = with;
+        (*count)++;
+    } else {
+        free(with);
+    }
+}
+
 int tidy_edits(const char *text, const char *arrow, const char *branch, long caretLine,
                bool on, TidyEdit *out, int max)
 {
@@ -409,36 +482,45 @@ int tidy_edits(const char *text, const char *arrow, const char *branch, long car
     int n = split_lines(text, &ls), i = 0, count = 0;
 
     while (i < n && count < max) {
-        int j, pass;
-        bool handled = false;
+        int j;
+        bool inside;
 
-        /* pass 0: a tidy block - back to raw if the caret is in it, or tidy
-         * view is off. pass 1: a finished raw block - tidied, unless the
-         * caret is in it. */
-        for (pass = 0; pass < 2 && !handled; pass++) {
-            bool tidy = pass == 0, isDelay = false;
-            if (!tidy && !on) break;
-            j = block_end(ls, n, i, arrow, tidy);
-            if (j < 0) { j = delay_end(ls, n, i, arrow, branch, tidy); isDelay = true; }
-            if (j < 0) continue;
-            handled = true;
-            if (tidy ? (!on || (caretLine >= i && caretLine < j))
-                     : !(caretLine >= i && caretLine < j)) {
-                char *with = isDelay ? convert_delay(ls, i, j, branch, !tidy)
-                                     : convert_lines(ls, i, j, arrow, !tidy);
-                size_t len = (size_t)(ls[j].s - ls[i].s);
-                if (with && (strlen(with) != len || memcmp(with, ls[i].s, len) != 0)) {
-                    out[count].start = (size_t)(ls[i].s - text);
-                    out[count].len = len;
-                    out[count].with = with;
-                    count++;
-                } else {
-                    free(with);
-                }
-            }
+        /* a tidy shape: back to raw if the caret is in it, or tidy view is off */
+        j = block_end(ls, n, i, arrow, true);
+        if (j >= 0) {
+            inside = caretLine >= i && caretLine < j;
+            if (!on || inside)
+                add_edit(out, &count, text, ls[i].s, (size_t)(ls[j].s - ls[i].s),
+                         convert_lines(ls, i, j, arrow, false));
             i = j + 1;
+            continue;
         }
-        if (!handled) i++;
+
+        /* a finished raw shape: tidied, unless the caret is in it */
+        if (on) {
+            j = block_end(ls, n, i, arrow, false);
+            if (j >= 0) {
+                inside = caretLine >= i && caretLine < j;
+                if (!inside)
+                    add_edit(out, &count, text, ls[i].s, (size_t)(ls[j].s - ls[i].s),
+                             convert_lines(ls, i, j, arrow, true));
+                i = j + 1;
+                continue;
+            }
+        }
+
+        /* a finished delay: tidy while tidy view is on, caret or no caret */
+        j = delay_end(ls, n, i, arrow, branch);
+        if (j >= 0) {
+            add_edit(out, &count, text, ls[i].s, (size_t)(ls[j].next - ls[i].s),
+                     convert_delay(ls, i, j, arrow, branch, on, caretLine));
+            i = j + 1;
+            continue;
+        }
+
+        add_edit(out, &count, text, ls[i].s, (size_t)(ls[i].e - ls[i].s),
+                 convert_stray(ls[i].s, ls[i].e, arrow, branch));
+        i++;
     }
     free(ls);
     return count;
