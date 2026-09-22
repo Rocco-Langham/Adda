@@ -1,0 +1,7 @@
+# nothing wrong here: no output at all
+[name] = ask What is your name?
+print Hello [name]
+call greet with [name]
+define greet with [who]
+    print Hi [who]
+end

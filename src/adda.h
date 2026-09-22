@@ -44,6 +44,14 @@ extern bool        adda_quiet;
 extern uint32_t    adda_err_line;
 extern const char *adda_err_at;          /* NULL when only the line is known */
 extern char        adda_err_msg[256];
+/* When the error is a misspelt word at adda_err_at, the word it should be
+ * (else NULL): adda --check puts it in and reads on, instead of blanking the
+ * line, so the lines after are not wrongly blamed too. */
+extern const char *adda_err_fix;
+extern uint32_t    adda_err_fix_len;     /* how many bytes at adda_err_at it replaces */
+
+/* How many single-letter changes turn one word into another. */
+uint32_t adda_edit_distance(const char *a, uint32_t alen, const char *b, uint32_t blen);
 
 /* ------------------------------------------------------------------ values */
 
@@ -276,6 +284,16 @@ Node *parse_mode(TokenList tokens, bool interactive);
  * openApplication, saying what will go wrong, and returns how many. With a
  * NULL `out` it only counts them. */
 int adda_warnings(Node *program, FILE *out);
+
+/* Mistakes that can be seen without running: a [variable] nothing ever sets,
+ * a call to a function that does not exist or with the wrong number of
+ * inputs, text for a shape that was never named, and a shape drawn before
+ * any openApplication. `extra` is source the parser could not read (the lines
+ * adda --check blanked out): any name in it counts as known, so one mistake
+ * does not make other lines look wrong. Each is reported with the text on its
+ * line to mark. */
+typedef void (*LintReport)(uint32_t line, const char *mark, const char *msg, void *ctx);
+void adda_lint(Node *program, const char *extra, LintReport report, void *ctx);
 
 /* ------------------------------------------------------------------ interp */
 

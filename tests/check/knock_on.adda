@@ -1,0 +1,6 @@
+# a broken if line: its end must not be blamed as well
+[x] = 1
+if [x] is
+    print yes
+end
+print done

@@ -2110,11 +2110,92 @@ static void layout(HWND hwnd)
 
 #define CHECK_LINE  RGB(0xFF, 0xE0, 0x66)   /* the whole line with a mistake */
 #define CHECK_SPOT  RGB(0xE5, 0x48, 0x4D)   /* the exact thing that is wrong */
-#define MAX_CHECK   20
+#define MAX_CHECK   60
 
-typedef struct { int line, col, len; } CheckMark;   /* line 1-based, col in chars */
+typedef struct { int line, col, len; char msg[240]; } CheckMark;   /* line 1-based, col in chars */
 static CheckMark g_chk[MAX_CHECK];
 static int       g_chkCount;
+
+/* Hovering over a marked line shows what is wrong with it. A tracking
+ * tooltip, moved and filled in by hand from CodeProc's mouse moves. */
+static HWND g_tip;
+static int  g_tipLine;              /* the line it is showing, 0 for none */
+
+static void tip_hide(void)
+{
+    TOOLINFOA ti;
+    if (!g_tip || !g_tipLine) return;
+    memset(&ti, 0, sizeof ti);
+    ti.cbSize = sizeof ti;
+    ti.hwnd = hwndMain;
+    ti.uId = 1;
+    SendMessageA(g_tip, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
+    g_tipLine = 0;
+}
+
+static void tip_hover(HWND code, int x, int y)
+{
+    static char text[MAX_CHECK * 250];
+    TOOLINFOA ti;
+    LRESULT at;
+    int line, k, first;
+    size_t used = 0;
+    POINT pt;
+
+    if (!g_chkCount) { tip_hide(); return; }
+    at = SendMessageA(code, EM_CHARFROMPOS, 0, MAKELPARAM(x, y));
+    line = (int)HIWORD(at) + 1;
+    {
+        /* past the last line EM_CHARFROMPOS still answers with it: check the row */
+        int row = (short)HIWORD(SendMessageA(code, EM_POSFROMCHAR,
+                                             (WPARAM)SendMessageA(code, EM_LINEINDEX, (WPARAM)(line - 1), 0), 0));
+        TEXTMETRICA tm;
+        HDC dc = GetDC(code);
+        HFONT old = (HFONT)SelectObject(dc, hFontCode);
+        GetTextMetricsA(dc, &tm);
+        SelectObject(dc, old);
+        ReleaseDC(code, dc);
+        if (y < row || y >= row + tm.tmHeight) line = 0;
+    }
+    if (line == g_tipLine) return;
+    tip_hide();
+    if (line <= 0) return;
+
+    text[0] = '\0';
+    for (k = 0, first = 1; k < g_chkCount; k++) {
+        if (g_chk[k].line != line || used >= sizeof text - 1) continue;
+        used += (size_t)snprintf(text + used, sizeof text - used, "%s%s", first ? "" : "\r\n",
+                                 g_chk[k].msg);
+        first = 0;
+    }
+    if (first) return;                          /* nothing wrong on this line */
+
+    if (!g_tip) {
+        g_tip = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL,
+                                WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+                                0, 0, 0, 0, hwndMain, NULL, GetModuleHandleA(NULL), NULL);
+        memset(&ti, 0, sizeof ti);
+        ti.cbSize = sizeof ti;
+        ti.uFlags = TTF_TRACK | TTF_ABSOLUTE;
+        ti.hwnd = hwndMain;
+        ti.uId = 1;
+        ti.lpszText = (LPSTR)"";
+        SendMessageA(g_tip, TTM_ADDTOOLA, 0, (LPARAM)&ti);
+        SendMessageA(g_tip, TTM_SETMAXTIPWIDTH, 0, S(420));
+    }
+    memset(&ti, 0, sizeof ti);
+    ti.cbSize = sizeof ti;
+    ti.hwnd = hwndMain;
+    ti.uId = 1;
+    ti.lpszText = text;
+    SendMessageA(g_tip, TTM_UPDATETIPTEXTA, 0, (LPARAM)&ti);
+    pt.x = x + S(12);
+    pt.y = y + S(18);
+    ClientToScreen(code, &pt);
+    SendMessageA(g_tip, TTM_TRACKPOSITION, 0, MAKELPARAM(pt.x, pt.y));
+    SendMessageA(g_tip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
+    g_tipLine = line;
+}
 
 /* Brings the code box's tidy view up to date: finished named shapes tidied,
  * the one the caret is in shown raw. Only the display changes - the file and
@@ -2197,7 +2278,7 @@ static void toggle_tidy(HWND hwnd)
 static void check_code(void)
 {
     char tmp_dir[MAX_PATH], path[MAX_PATH * 2], exe[MAX_PATH], cmd[MAX_PATH * 4];
-    char out[8192], *line;
+    char out[16384], *line;
     SECURITY_ATTRIBUTES sa;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -2265,6 +2346,7 @@ static void check_code(void)
         int used = 0;
         char msg[320];
         if (sscanf(line, "%d %d %d %n", &m.line, &m.col, &m.len, &used) < 3 || used == 0) continue;
+        snprintf(m.msg, sizeof m.msg, "%s", line + used);
         g_chk[g_chkCount++] = m;
         if (!g_running) {
             snprintf(msg, sizeof msg, "  line %d: %s\r\n", m.line, line + used);
@@ -2522,6 +2604,17 @@ static LRESULT CALLBACK CodeProc(HWND h, UINT msg, WPARAM w, LPARAM l,
         paint_check(h);
         paint_gutter(h);
     }
+    if (msg == WM_MOUSEMOVE) {
+        TRACKMOUSEEVENT tme;
+        tme.cbSize = sizeof tme;
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = h;
+        tme.dwHoverTime = 0;
+        TrackMouseEvent(&tme);      /* so WM_MOUSELEAVE comes */
+        tip_hover(h, (short)LOWORD(l), (short)HIWORD(l));
+    }
+    if (msg == WM_MOUSELEAVE || msg == WM_KEYDOWN || msg == WM_MOUSEWHEEL || msg == WM_VSCROLL)
+        tip_hide();
     /* the caret may have moved onto a tidy line, or off one */
     if ((msg == WM_KEYUP || msg == WM_LBUTTONUP || msg == WM_SETFOCUS || msg == WM_KILLFOCUS) &&
         !g_tidying)

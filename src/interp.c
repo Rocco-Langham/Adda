@@ -88,27 +88,29 @@ static void scope_set(Scope *s, Text *name, Value v)
 
 /* ------------------------------------------------- "did you mean ...?" */
 
-static uint32_t edit_distance(const char *a, uint32_t alen, const char *b, uint32_t blen)
+/* Letters added, removed, changed or swapped with the next one: nmae is one
+ * away from name. */
+uint32_t adda_edit_distance(const char *a, uint32_t alen, const char *b, uint32_t blen)
 {
-    uint32_t row[64], i, j;
+    uint32_t d[64][64], i, j;
 
     if (alen > 62 || blen > 62) return 99;
-    for (j = 0; j <= blen; j++) row[j] = j;
+    for (i = 0; i <= alen; i++) d[i][0] = i;
+    for (j = 0; j <= blen; j++) d[0][j] = j;
 
     for (i = 1; i <= alen; i++) {
-        uint32_t prev = row[0];
-        row[0] = i;
         for (j = 1; j <= blen; j++) {
-            uint32_t cur = row[j];
             uint32_t cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
-            uint32_t best = row[j] + 1;
-            if (row[j - 1] + 1 < best) best = row[j - 1] + 1;
-            if (prev + cost < best)    best = prev + cost;
-            row[j] = best;
-            prev = cur;
+            uint32_t best = d[i - 1][j] + 1;
+            if (d[i][j - 1] + 1 < best)        best = d[i][j - 1] + 1;
+            if (d[i - 1][j - 1] + cost < best) best = d[i - 1][j - 1] + cost;
+            if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] &&
+                d[i - 2][j - 2] + 1 < best)
+                best = d[i - 2][j - 2] + 1;
+            d[i][j] = best;
         }
     }
-    return row[blen];
+    return d[alen][blen];
 }
 
 static Text *nearest_name(Scope *s, Text *name)
@@ -120,7 +122,7 @@ static Text *nearest_name(Scope *s, Text *name)
         uint32_t i;
         for (i = 0; i < s->count; i++) {
             Text *c = s->names[i];
-            uint32_t d = edit_distance(name->bytes, name->len, c->bytes, c->len);
+            uint32_t d = adda_edit_distance(name->bytes, name->len, c->bytes, c->len);
             if (d < best_d) { best_d = d; best = c; }
         }
     }

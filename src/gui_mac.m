@@ -283,6 +283,7 @@ static void clear_check(void);
 static void colour_code(void);
 static NSString *raw_code(void);
 static NSMutableArray<NSValue *> *g_checkLines;   /* the check marks' lines */
+static NSMutableArray<NSString *> *g_checkTips;   /* what each marked line's tooltip says (kept alive: a tooltip's owner is not) */
 static void stop_code(void);
 static void send_line(void);
 static void console_clear_pending(void);
@@ -3292,6 +3293,8 @@ static void clear_check(void)
     NSLayoutManager *lm = g_code.layoutManager;
     if (!g_checkLines.count) return;
     [g_checkLines removeAllObjects];
+    [g_code removeAllToolTips];
+    [g_checkTips removeAllObjects];
     [lm removeTemporaryAttribute:NSBackgroundColorAttributeName
                forCharacterRange:NSMakeRange(0, g_code.string.length)];
     [lm removeTemporaryAttribute:NSForegroundColorAttributeName
@@ -3324,6 +3327,8 @@ static void check_code(void)
     NSTask *task = [NSTask new];
     NSPipe *pipe = [NSPipe pipe];
     NSData *data;
+    NSMutableDictionary<NSNumber *, NSMutableString *> *tips = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *, NSValue *> *tipRanges = [NSMutableDictionary dictionary];
     int found = 0;
 
     clear_check();
@@ -3384,7 +3389,31 @@ static void check_code(void)
                     forCharacterRange:spot];
         }
         [report appendFormat:@"  line %d: %@\n", line, msg];
+        {
+            NSMutableString *said = tips[@(line)];
+            if (said) [said appendFormat:@"\n%@", msg];
+            else { tips[@(line)] = [msg mutableCopy]; tipRanges[@(line)] = [NSValue valueWithRange:whole]; }
+        }
         found++;
+    }
+
+    /* hovering over a marked line says what is wrong with it */
+    if (!g_checkTips) g_checkTips = [NSMutableArray array];
+    [lm ensureLayoutForTextContainer:g_code.textContainer];
+    for (NSNumber *key in tips) {
+        NSRange chars = tipRanges[key].rangeValue;
+        NSRange glyphs = [lm glyphRangeForCharacterRange:chars actualCharacterRange:NULL];
+        NSUInteger last = lm.numberOfGlyphs ? lm.numberOfGlyphs - 1 : 0;
+        NSRect r = glyphs.length
+                 ? [lm boundingRectForGlyphRange:glyphs inTextContainer:g_code.textContainer]
+                 : [lm lineFragmentRectForGlyphAtIndex:glyphs.location < last ? glyphs.location : last
+                                        effectiveRange:NULL];
+        NSString *tip = [tips[key] copy];
+        r.origin.x = 0;
+        r.origin.y += g_code.textContainerOrigin.y;
+        r.size.width = g_code.bounds.size.width;
+        [g_checkTips addObject:tip];
+        [g_code addToolTipRect:r owner:tip userData:NULL];
     }
     g_code.needsDisplay = YES;
 

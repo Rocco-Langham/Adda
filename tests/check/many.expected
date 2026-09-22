@@ -1,0 +1,10 @@
+2 12 6 nothing ever sets [nmae] - did you mean [name]?
+3 0 4 Adda does not know the word 'prnt' - did you mean 'print'?
+4 0 4 Adda does not know the word 'whle' - did you mean 'while'?
+4 5 3 nothing ever sets [x] - give it a value first, like: [x] = 0
+6 5 5 there is no function called 'greet' - make one with: define greet
+10 12 3 'add' needs 2 inputs, but got 1
+11 0 6 insert draws in the app window - put openApplication on a line before it
+13 5 4 there is no shape called [bx] - name one with: insert box; name = [bx]
+14 0 16 this 'if' is never closed - add 'end' after its last line
+exit: 0

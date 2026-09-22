@@ -1296,6 +1296,33 @@ static Node *statement(P *p)
         return n;
     }
 
+    /* a misspelt first word: prnt, whle, Print */
+    if (p->t[s].kind == TK_WORD && !p->t[s].bracketed) {
+        static const char *const words[] = {
+            "print", "if", "else", "while", "for", "define", "return", "call", "add",
+            "remove", "end", "delay", "openApplication", "insert", NULL
+        };
+        char low[32];
+        uint32_t len = p->t[s].len, k, best = len <= 3 ? 2 : 3;
+        const char *fix = NULL;
+        if (len < sizeof low) {
+            for (k = 0; k < len; k++) low[k] = (char)tolower((unsigned char)p->t[s].start[k]);
+            for (k = 0; words[k]; k++) {
+                char w[32];
+                uint32_t wl = (uint32_t)strlen(words[k]), j, d;
+                for (j = 0; j < wl; j++) w[j] = (char)tolower((unsigned char)words[k][j]);
+                d = adda_edit_distance(low, len, w, wl);
+                if (d < best) { best = d; fix = words[k]; }
+            }
+        }
+        if (fix) {
+            adda_err_fix = fix;
+            adda_err_fix_len = len;
+            adda_error_at(p->t[s].start, line, "Adda does not know the word '%.*s' - did you "
+                          "mean '%s'?", (int)len, p->t[s].start, fix);
+        }
+    }
+
     adda_error_at(p->t[s].start, line,
                   "I do not know what to do with this line - did you mean 'print %.*s'?",
                   (int)(token_end(&p->t[e - 1]) - p->t[s].start), p->t[s].start);

@@ -44,7 +44,7 @@ esac
 # along per platform. On a Mac it is Objective-C, compiled on its own (without
 # -std=c99) and linked in with Cocoa.
 CORE="src/arena.c src/error.c src/value.c src/map.c \
-      src/lexer.c src/parser.c src/interp.c src/repl.c src/main.c"
+      src/lexer.c src/parser.c src/lint.c src/interp.c src/repl.c src/main.c"
 if [ "$(uname -o 2>/dev/null)" = "Msys" ] || [ "$OS" = "Windows_NT" ]; then
     "$CC" $WARN $DEFS $FLAGS -o adda $CORE src/window_win.c -lm -luser32 -lgdi32
 elif [ "$(uname -s)" = "Darwin" ]; then

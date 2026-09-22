@@ -21,8 +21,9 @@ accept=0
 pass=0
 fail=0
 
-# tests/*.adda are run as files; tests/repl/*.in are typed at the prompt.
-for f in tests/*.adda tests/errors/*.adda tests/repl/*.in; do
+# tests/*.adda are run as files; tests/repl/*.in are typed at the prompt;
+# tests/check/*.adda go through the problem finder (adda --check).
+for f in tests/*.adda tests/errors/*.adda tests/repl/*.in tests/check/*.adda; do
     [ -e "$f" ] || continue
     expected="${f%.*}.expected"
 
@@ -34,6 +35,7 @@ for f in tests/*.adda tests/errors/*.adda tests/repl/*.in; do
 
     case "$f" in
         *.in) out=$("$ADDA" < "$f" 2>&1) ;;
+        tests/check/*) out=$("$ADDA" --check "$f" < /dev/null 2>&1) ;;
         *)    out=$("$ADDA" "$f" < "$input" 2>&1) ;;
     esac
     code=$?

@@ -38,34 +38,155 @@ static bool go_ahead(Node *program)
     return answer[0] == 'y' || answer[0] == 'Y';
 }
 
-/* --check: report every syntax error without running anything, one per line
- * on stdout as `line column length message` (column 0-based, in bytes).
+/* --check: report every mistake that can be found without running, one per
+ * line on stdout as `line column length message` (column 0-based, in bytes),
+ * in line order.
+ *
  * The parser stops at its first error, so the line it complained about is
- * blanked out - keeping its newline, so every other line keeps its number -
- * and the whole thing is parsed again, until it passes or stops making
- * progress. */
+ * dealt with and the whole thing parsed again, until it passes or stops making
+ * progress. A misspelt word is corrected; a line that opens a block is left
+ * opening one (`if true`), so its `end` is not blamed as well; anything else
+ * is blanked, keeping its newline so every other line keeps its number. Once
+ * it parses, adda_lint looks for names that are used but never made. */
+
+#define MAX_FOUND 60
+
+typedef struct { uint32_t line; int col, len; char msg[256]; } Found;
+
+typedef struct {
+    Found       f[MAX_FOUND];
+    int         n;
+    const char *orig;            /* the source as written, for finding marks */
+} Findings;
+
+static const char *nth_line(const char *src, uint32_t line, const char **end)
+{
+    const char *start = src, *e;
+    uint32_t n;
+    for (n = 1; *start && n < line; start++)
+        if (*start == '\n') n++;
+    for (e = start; *e && *e != '\n'; e++) {}
+    while (e > start && e[-1] == '\r') e--;
+    *end = e;
+    return start;
+}
+
+static void found(Findings *fs, uint32_t line, int col, int len, const char *msg)
+{
+    int i;
+    if (fs->n == MAX_FOUND) return;
+    for (i = 0; i < fs->n; i++)             /* the same thing twice on a line */
+        if (fs->f[i].line == line && fs->f[i].col == col && strcmp(fs->f[i].msg, msg) == 0)
+            return;
+    fs->f[fs->n].line = line;
+    fs->f[fs->n].col = col;
+    fs->f[fs->n].len = len < 1 ? 1 : len;
+    snprintf(fs->f[fs->n].msg, sizeof fs->f[0].msg, "%s", msg);
+    fs->n++;
+}
+
+/* adda_lint's report: mark the text it names, where it is on the line */
+static void lint_found(uint32_t line, const char *mark, const char *msg, void *ctx)
+{
+    Findings *fs = ctx;
+    const char *end, *start = nth_line(fs->orig, line, &end), *at = NULL, *p;
+    size_t n = strlen(mark);
+
+    for (p = start; p + 5 + n <= end && !at; p++)        /* a function: after call */
+        if (memcmp(p, "call ", 5) == 0 && memcmp(p + 5, mark, n) == 0) at = p + 5;
+    for (p = start; p + n <= end && !at; p++)
+        if (memcmp(p, mark, n) == 0) at = p;
+    if (at) {
+        found(fs, line, (int)(at - start), (int)n, msg);
+    } else {
+        const char *b = start;
+        while (b < end && (*b == ' ' || *b == '\t')) b++;
+        found(fs, line, (int)(b - start), (int)(end - b), msg);
+    }
+}
+
+static int by_place(const void *x, const void *y)
+{
+    const Found *a = x, *b = y;
+    if (a->line != b->line) return a->line < b->line ? -1 : 1;
+    return (a->col > b->col) - (a->col < b->col);
+}
+
+/* What a line that opens a block becomes when it cannot be read: the same
+ * kind of block, so its end still has something to close. NULL: blank it. */
+static const char *stand_in(const char *start, const char *end)
+{
+    static const char *const kinds[][2] = {
+        { "else if", "else if true" }, { "if", "if true" }, { "while", "while false" },
+        { "for", "for each [_] in list" }, { "define", "define _" }, { "delay", "delay 0" },
+    };
+    const char *p = start;
+    size_t i;
+    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    for (i = 0; i < sizeof kinds / sizeof kinds[0]; i++) {
+        size_t n = strlen(kinds[i][0]);
+        if ((size_t)(end - p) >= n && memcmp(p, kinds[i][0], n) == 0 &&
+            (p + n == end || p[n] == ' ' || p[n] == '\t')) {
+            if (strcmp(kinds[i][0], "delay") == 0) {          /* not delay end */
+                const char *q = p + n;
+                while (q < end && (*q == ' ' || *q == '\t')) q++;
+                if ((size_t)(end - q) >= 3 && memcmp(q, "end", 3) == 0) return NULL;
+            }
+            return kinds[i][1];
+        }
+    }
+    return NULL;
+}
+
+/* src with the bytes [from, to) replaced by `with` (a new buffer) */
+static char *splice(const char *src, const char *from, const char *to, const char *with)
+{
+    size_t a = (size_t)(from - src), w = strlen(with), rest = strlen(to);
+    char *out = adda_alloc(a + w + rest + 1);
+    memcpy(out, src, a);
+    memcpy(out + a, with, w);
+    memcpy(out + a + w, to, rest + 1);
+    return out;
+}
+
 static void check(char *src)
 {
-    volatile int found = 0;
+    static Findings fs;
+    char *extra = adda_alloc(strlen(src) * 2 + 2);  /* the lines given up on */
+    size_t extraLen = 0;
+    Node *volatile program = NULL;
     volatile uint32_t lastLine = 0;
+    volatile int errors = 0, fixedLast = 0;
+    int i;
 
+    fs.n = 0;
+    fs.orig = src;
+    extra[0] = '\0';
     adda_quiet = true;
-    while (found < 20) {
-        const char *start, *end, *at;
-        uint32_t n;
+    while (errors < 25) {
+        const char *start, *end, *at, *standIn;
         int col, len;
 
+        adda_err_fix = NULL;
         if (setjmp(adda_error_jmp) == 0) {
-            (void)parse(lex(src));
-            break;                                  /* clean */
+            program = parse(lex(src));
+            break;                                  /* it reads */
         }
-        if (adda_err_line == 0 || adda_err_line == lastLine) break;
-        lastLine = adda_err_line;
+        if (adda_err_line == 0) break;
+        start = nth_line(src, adda_err_line, &end);
 
-        for (start = src, n = 1; *start && n < adda_err_line; start++)
-            if (*start == '\n') n++;
-        for (end = start; *end && *end != '\n'; end++) {}
-        while (end > start && end[-1] == '\r') end--;
+        if (adda_err_line == lastLine) {
+            /* a line that went wrong again after a fix: give up on it */
+            if (!fixedLast) break;
+            fixedLast = 0;
+            memcpy(extra + extraLen, start, (size_t)(end - start));
+            extraLen += (size_t)(end - start);
+            extra[extraLen++] = '\n';
+            extra[extraLen] = '\0';
+            src = splice(src, start, end, "");
+            continue;
+        }
+        lastLine = adda_err_line;
 
         at = adda_err_at;
         if (at && at >= start && at <= end) {
@@ -82,15 +203,37 @@ static void check(char *src)
             while (b < end && (*b == ' ' || *b == '\t')) b++;
             col = (int)(b - start);
             len = (int)(end - b);
+            at = NULL;
         }
-        if (len < 1) len = 1;                       /* e.g. something missing at the end */
+        found(&fs, adda_err_line, col, len, adda_err_msg);
+        errors++;
 
-        printf("%u %d %d %s\n", (unsigned)adda_err_line, col, len, adda_err_msg);
-        found++;
-
-        for (at = start; at < end; at++) *(char *)at = ' ';
+        if (adda_err_fix && at) {                   /* prnt -> print, and read on */
+            src = splice(src, at, at + adda_err_fix_len, adda_err_fix);
+            fixedLast = 1;
+            continue;
+        }
+        /* the rest of the line is lost to the parser: keep its names */
+        memcpy(extra + extraLen, start, (size_t)(end - start));
+        extraLen += (size_t)(end - start);
+        extra[extraLen++] = '\n';
+        extra[extraLen] = '\0';
+        if (!strstr(adda_err_msg, "no open block") && !strstr(adda_err_msg, "never closed") &&
+                   (standIn = stand_in(start, end)) != NULL) {
+            src = splice(src, start, end, standIn);
+            fixedLast = 1;                          /* if the stand-in fails too, blank it */
+        } else {
+            src = splice(src, start, end, "");
+            fixedLast = 0;
+        }
     }
+    if (program && setjmp(adda_error_jmp) == 0)
+        adda_lint(program, extra, lint_found, &fs);
     adda_quiet = false;
+
+    qsort(fs.f, (size_t)fs.n, sizeof fs.f[0], by_place);
+    for (i = 0; i < fs.n; i++)
+        printf("%u %d %d %s\n", (unsigned)fs.f[i].line, fs.f[i].col, fs.f[i].len, fs.f[i].msg);
 }
 
 static char *read_file(const char *path)

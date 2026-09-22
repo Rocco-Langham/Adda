@@ -100,9 +100,11 @@ That produces `./adda`. Run a program with:
 ```
 
 Other flags: `--tokens` shows how the lexer split your source, and `--stats`
-reports how much memory the run used. `--check` lists every syntax error
-without running anything, one per line as `line column length message` - it
-is what the GUI's warning-triangle button uses. `--warnings` lists what may go
+reports how much memory the run used. `--check` lists every mistake it can
+find without running anything - syntax errors, misspelt words, variables
+nothing sets, calls to missing functions or with the wrong number of inputs -
+one per line as `line column length message`. It is what the GUI's
+warning-triangle button uses. `--warnings` lists what may go
 wrong without running, such as a `return (N)` that goes back over
 `openApplication`; the GUI asks about these before it runs.
 
@@ -287,6 +289,7 @@ something to fix before writing a game loop.
 | `src/adda.h` | Every shared type: values, objects, tokens, AST nodes |
 | `src/lexer.c` | Tokens, and the space-around-operators rule |
 | `src/parser.c` | The text-vs-maths decision, and the whole grammar |
+| `src/lint.c` | Mistakes `--check` finds without running: names used but never made |
 | `src/interp.c` | Scopes, evaluation, control flow |
 | `src/repl.c` | The interactive prompt: continuation lines, error recovery |
 | `src/value.c`, `src/map.c` | Text, lists, and the ordered hash map |

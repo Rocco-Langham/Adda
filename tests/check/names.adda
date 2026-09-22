@@ -1,0 +1,18 @@
+# names that are used but never made
+[total] = 10
+print [totl]
+for each [n] in list 1, 2
+    print [n]
+end
+define double with [x]
+    return [x] * 2
+end
+print {call doubel with 3}
+print {call double with 3, 4}
+print {call double with [total]}
+openApplication
+insert rounded box; name = [box1]
+15px top
+end
+text [box2] hello
+text [box1] fine

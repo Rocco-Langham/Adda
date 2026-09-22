@@ -68,6 +68,8 @@ bool        adda_quiet;
 uint32_t    adda_err_line;
 const char *adda_err_at;
 char        adda_err_msg[256];
+const char *adda_err_fix;
+uint32_t    adda_err_fix_len;
 
 static void report(const char *at, uint32_t line, const char *fmt, va_list ap)
 {

@@ -1,0 +1,15 @@
+[name] = ask what is name
+print hello [nmae]
+prnt hi
+whle [x] < 3
+end
+call greet with 1
+define add with [a], [b]
+    return [a] + [b]
+end
+print {call add with 1}
+insert box
+15px top
+text [bx] hi
+if [name] is Tom
+print yes
