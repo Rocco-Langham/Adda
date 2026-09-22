@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <setjmp.h>
+#include <stdio.h>
 
 /* ------------------------------------------------------------------ arena */
 
@@ -247,12 +248,14 @@ typedef enum {
     /* statements */
     N_BLOCK, N_ASSIGN, N_PRINT, N_IF, N_WHILE, N_FOREACH,
     N_DEFINE, N_RETURN, N_ADD, N_REMOVE, N_EXPRSTMT, N_DELAY, N_OPENAPP, N_SHAPE,
-    N_SHAPETEXT
+    N_SHAPETEXT,
+    N_GOTO        /* return (3) outside a function: go back to line 3 */
 } NodeKind;
 
 struct Node {
     NodeKind  kind;
     uint32_t  line;
+    uint32_t  last;          /* a top-level statement's last line (for return (N)) */
     Node     *a, *b, *c;     /* operands / condition / branches */
     Node    **kids;          /* block statements, list elements, call args */
     uint32_t  nkids;
@@ -268,6 +271,11 @@ Node *parse(TokenList tokens);
 /* Interactive parsing lets a bare expression stand as a statement, so the REPL
  * can echo it instead of refusing the line. */
 Node *parse_mode(TokenList tokens, bool interactive);
+
+/* Writes a warning to `out` for each return (N) that goes back over an
+ * openApplication, saying what will go wrong, and returns how many. With a
+ * NULL `out` it only counts them. */
+int adda_warnings(Node *program, FILE *out);
 
 /* ------------------------------------------------------------------ interp */
 

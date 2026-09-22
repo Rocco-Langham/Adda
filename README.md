@@ -102,7 +102,9 @@ That produces `./adda`. Run a program with:
 Other flags: `--tokens` shows how the lexer split your source, and `--stats`
 reports how much memory the run used. `--check` lists every syntax error
 without running anything, one per line as `line column length message` - it
-is what the GUI's warning-triangle button uses.
+is what the GUI's warning-triangle button uses. `--warnings` lists what may go
+wrong without running, such as a `return (N)` that goes back over
+`openApplication`; the GUI asks about these before it runs.
 
 ## Typing at it
 
@@ -215,6 +217,8 @@ end
 while [age] < 40
     [age] = [age] + 1
 end
+
+# return (3) goes back to line 3 - inside a define, return gives back a value
 
 define greet with [person]        # functions live at the top level
     print Hello [person]

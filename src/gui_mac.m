@@ -1148,13 +1148,58 @@ static BOOL start_run(NSString *code, NSString *name, BOOL fresh)
     return YES;
 }
 
+/* What adda --warnings says about `code`: nothing, or what may go wrong. */
+static NSString *code_warnings(NSString *code)
+{
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"_adda_warn.adda"];
+    NSTask *task = [NSTask new];
+    NSPipe *pipe = [NSPipe pipe];
+    NSData *data;
+    NSString *out;
+
+    if (![code writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:NULL])
+        return @"";
+    task.executableURL = [NSURL fileURLWithPath:adda_path()];
+    task.arguments = @[ @"--warnings", path ];
+    task.standardOutput = pipe;
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    if (![task launchAndReturnError:NULL]) {
+        unlink(path.fileSystemRepresentation);
+        return @"";                 /* start_run says adda is missing */
+    }
+    data = [pipe.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    unlink(path.fileSystemRepresentation);
+    out = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return [out ? out : @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+}
+
+/* Shows the warnings, if there are any, and asks whether to run anyway. */
+static BOOL ok_to_run(NSString *warnings)
+{
+    NSAlert *a;
+
+    if (!warnings.length) return YES;
+    a = [NSAlert new];
+    a.alertStyle = NSAlertStyleWarning;
+    a.messageText = @"This program goes back over openApplication";
+    a.informativeText = warnings;
+    [a addButtonWithTitle:@"Run Anyway"];
+    [a addButtonWithTitle:@"Cancel"];
+    return [a runModal] == NSAlertFirstButtonReturn;
+}
+
 static void run_code(void)
 {
+    NSString *code;
+
     if (g_running) return;
     g_runQueue = nil;
     save_current();                 /* a run is a good moment to keep your work */
+    code = raw_code();
+    if (!ok_to_run(code_warnings(code))) return;
     /* the file's own name, so an error says style.adda:3 */
-    start_run(raw_code(), g_curPath ? g_curPath.lastPathComponent : @"program.adda", YES);
+    start_run(code, g_curPath ? g_curPath.lastPathComponent : @"program.adda", YES);
 }
 
 /* Every program in `dir`: its own files first - first.adda leading - then
@@ -1220,6 +1265,18 @@ static void run_all_files(void)
     if (!all.count) {
         warn(@"There are no .adda files in this project to run.");
         return;
+    }
+    {
+        NSMutableString *warnings = [NSMutableString string];
+        for (NSString *path in all) {
+            NSString *code = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding
+                                                          error:NULL];
+            NSString *w = code ? code_warnings(code) : @"";
+            if (w.length)
+                [warnings appendFormat:@"%@%@:\n%@", warnings.length ? @"\n\n" : @"",
+                                       path.lastPathComponent, w];
+        }
+        if (!ok_to_run(warnings)) return;
     }
     console_replace(NSMakeRange(0, console_len()), @"");
     g_anchor = 0;

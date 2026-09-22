@@ -240,6 +240,53 @@ it has already appeared, so this is how you pace output. The dash is optional
 (`delay 1500`), the time can be a variable (`delay - [wait]`), a plain `end`
 closes the block as well as `delay end`, and one delay can sit inside another.
 
+### Going back to a line
+
+`return (3)` goes back to line 3 and carries on from there. The number is the
+line number shown down the left of the editor:
+
+```adda
+print hello
+[name] = ask what is your name?
+return (1)
+```
+
+That asks again and again, forever - press Stop to end it. Put the `return`
+inside an `if` to go back only sometimes:
+
+```adda
+[count] = 0
+[count] = [count] + 1
+print round {[count]}
+if [count] < 3
+    return (2)
+end
+print done
+```
+
+A `return` can also jump forward, to skip lines. It jumps straight out of any
+`if`, `while` or `for each` it is inside, but it can only land on a line that
+is not inside a block. Going back to a blank line or a comment carries on
+from the next line after it.
+
+Inside a function `return` still hands back a value, so `return (1)` in a
+`define` gives back 1. Outside one, write the number in brackets; plain
+`return 3` asks you to.
+
+**Going back over `openApplication`.** If the lines a `return` goes back over
+include `openApplication`, Adda warns you before it runs and asks whether to
+run anyway. This is what goes wrong:
+
+- `openApplication` does not open another window each time round - the same
+  window is used again.
+- Everything printed or drawn keeps piling up in that window, on top of what
+  is already there.
+- If the `return` is not inside an `if`, nothing stops it, so the program never
+  ends by itself - you have to press Stop or close the window.
+
+The editor asks in a pop-up. Run from a terminal, `adda` asks
+`Run it anyway? (y/n)`, and `adda --warnings file` just lists the warnings.
+
 ### Opening a window
 
 `openApplication` opens a new window - the start of an app of your own.

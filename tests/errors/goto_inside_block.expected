@@ -1,0 +1,4 @@
+tests/errors/goto_inside_block.adda:5: line 3 is inside the 'while' on line 2 - return can only go back to a line that is not inside a block
+     5 | return (3)
+       | ^
+exit: 65

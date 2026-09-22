@@ -240,6 +240,11 @@ static const Cheat CHEAT_REPEATING[] = {
   "Waits this many milliseconds (1000 is a second), then runs the lines under it. pause, sleep, wait, timer, later",
   "Waits 1500 milliseconds, which is one and a half seconds, then prints hello and hi one straight after the other. The lines between delay and delay end are the ones that wait. 1000 milliseconds is one second.",
   "delay - 1500\r\n    print hello\r\n    print hi\r\ndelay end", 0 },
+
+{ "Go back to a line",
+  "return (1) goes back to line 1 and carries on from there. goto, jump, again, repeat, loop, line",
+  "Prints hello, asks for a name, then return (1) goes back to line 1, so it prints hello and asks again, forever - press Stop to end it. The number in brackets is the line number down the left of the editor. Put the return inside an if to go back only sometimes. If the lines it goes back over include openApplication, Adda warns you before running: the same window is used again, what is printed piles up in it, and it may never end.",
+  "print hello\r\n[name] = ask what is name\r\nreturn (1)", 0 },
 };
 
 /* ---- lists ------------------------------------------------------------- */

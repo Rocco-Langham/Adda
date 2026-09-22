@@ -6,6 +6,7 @@
  *   adda --tokens file       show how the lexer split the source
  *   adda --stats file        run it, then report arena bytes used
  *   adda --check file        list syntax errors without running (for the GUI)
+ *   adda --warnings file     list what may go wrong, without running (for the GUI)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +16,27 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <io.h>
+#define at_terminal(f) _isatty(_fileno(f))
+#else
+#include <unistd.h>
+#define at_terminal(f) isatty(fileno(f))
 #endif
+
+/* Warnings are asked about before running, when someone is at the terminal
+ * to answer. Run from the GUI, stdin is a pipe: the GUI has asked already. */
+static bool go_ahead(Node *program)
+{
+    char answer[16];
+
+    if (!at_terminal(stdin) || !at_terminal(stderr)) return true;
+    if (!adda_warnings(program, NULL)) return true;
+    fputs("Warning:\n", stderr);
+    (void)adda_warnings(program, stderr);
+    fputs("\nRun it anyway? (y/n) ", stderr);
+    if (!fgets(answer, sizeof answer, stdin)) return false;
+    return answer[0] == 'y' || answer[0] == 'Y';
+}
 
 /* --check: report every syntax error without running anything, one per line
  * on stdout as `line column length message` (column 0-based, in bytes).
@@ -110,7 +131,7 @@ static void dump_tokens(const char *src)
 
 static void usage(void)
 {
-    fputs("usage: adda [--tokens|--ast|--stats|--check] program.adda\n"
+    fputs("usage: adda [--tokens|--ast|--stats|--check|--warnings] program.adda\n"
           "       adda                      start an interactive session\n", stderr);
     exit(64);
 }
@@ -155,12 +176,18 @@ int main(int argc, char **argv)
 
     if (mode && strcmp(mode, "--check") == 0) {
         check(src);
+    } else if (mode && strcmp(mode, "--warnings") == 0) {
+        (void)adda_warnings(parse(lex(src)), stdout);
     } else if (mode && strcmp(mode, "--tokens") == 0) {
         dump_tokens(src);
     } else if (mode && strcmp(mode, "--ast") == 0) {
         fputs("adda: --ast is not available yet\n", stderr);
     } else {
         Node *program = parse(lex(src));
+        if (!go_ahead(program)) {
+            arena_free_all();
+            return 0;
+        }
         interpret(program);
         fflush(stdout);
         if (adda_window_is_open()) adda_window_run();   /* stays up until closed */

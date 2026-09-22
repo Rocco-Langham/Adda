@@ -1098,11 +1098,99 @@ static BOOL start_run(HWND hwnd, const char *code, size_t len, const char *name,
     return TRUE;
 }
 
+/* What adda --warnings says about `code`, into out: empty, or what may go
+ * wrong. */
+static void code_warnings(const char *code, size_t len, char *out, size_t cap)
+{
+    char tmp_dir[MAX_PATH], path[MAX_PATH * 2], exe[MAX_PATH], cmd[MAX_PATH * 4];
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    HANDLE rd = NULL, wr = NULL;
+    DWORD got, total = 0;
+    FILE *f;
+
+    out[0] = '\0';
+    GetTempPathA(MAX_PATH, tmp_dir);
+    snprintf(path, sizeof path, "%s_adda_warn.adda", tmp_dir);
+    f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(code, 1, len, f);
+    fclose(f);
+
+    get_adda_path(exe, MAX_PATH);
+    snprintf(cmd, sizeof cmd, "\"%s\" --warnings \"%s\"", exe, path);
+    sa.nLength = sizeof sa;
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+    if (!CreatePipe(&rd, &wr, &sa, 0)) { remove(path); return; }
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+
+    ZeroMemory(&si, sizeof si);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = wr;
+    si.hStdError = NULL;
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi)) {
+        CloseHandle(rd); CloseHandle(wr); remove(path);
+        return;                     /* start_run says adda.exe is missing */
+    }
+    CloseHandle(wr);
+    while (total < cap - 1 &&
+           ReadFile(rd, out + total, (DWORD)(cap - 1 - total), &got, NULL) && got)
+        total += got;
+    out[total] = '\0';
+    WaitForSingleObject(pi.hProcess, 5000);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(rd);
+    remove(path);
+    while (total && (out[total - 1] == '\n' || out[total - 1] == '\r')) out[--total] = '\0';
+}
+
+/* Shows the warnings, if there are any, and asks whether to run anyway. */
+static BOOL ok_to_run(HWND hwnd, const char *warnings)
+{
+    char *msg;
+    size_t n;
+    int pick;
+
+    if (!warnings[0]) return TRUE;
+    n = strlen(warnings) + 64;
+    msg = (char *)malloc(n);
+    if (!msg) return TRUE;
+    snprintf(msg, n, "%s\n\nRun it anyway?", warnings);
+    pick = MessageBoxA(hwnd, msg, "This program goes back over openApplication",
+                       MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+    free(msg);
+    return pick == IDYES;
+}
+
+/* The whole of a file (malloc'd, 0-ended), or NULL. */
+static char *read_whole(const char *path, long *size)
+{
+    FILE *f = fopen(path, "rb");
+    char *code;
+
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    *size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (*size < 0) *size = 0;
+    code = (char *)malloc((size_t)*size + 1);
+    if (!code) { fclose(f); return NULL; }
+    *size = (long)fread(code, 1, (size_t)*size, f);
+    code[*size] = '\0';
+    fclose(f);
+    return code;
+}
+
 static void run_code(HWND hwnd)
 {
     char *code;
     const char *name;
     int len;
+    char warnings[4096];
 
     if (g_running) return;
     g_runAll = FALSE;
@@ -1110,6 +1198,8 @@ static void run_code(HWND hwnd)
 
     code = code_text(&len);
     if (!code) return;
+    code_warnings(code, (size_t)len, warnings, sizeof warnings);
+    if (!ok_to_run(hwnd, warnings)) { free(code); return; }
 
     /* the file's own name, so an error says style.adda:3 */
     name = strrchr(g_curPath, '\\');
@@ -1173,7 +1263,6 @@ static void run_next(HWND hwnd)
         const char *path = g_runPaths[g_runNext++];
         const char *leaf = strrchr(path, '\\');
         char heading[MAX_PATH * 3];
-        FILE *f;
         long size;
         char *code;
         BOOL started;
@@ -1184,15 +1273,8 @@ static void run_next(HWND hwnd)
         console_append(heading);
         g_anchor = console_len();
 
-        f = fopen(path, "rb");
-        if (!f) { console_append("[could not read this file]\r\n\r\n"); continue; }
-        fseek(f, 0, SEEK_END);
-        size = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        code = (char *)malloc((size_t)(size > 0 ? size : 0) + 1);
-        if (!code) { fclose(f); continue; }
-        size = (long)fread(code, 1, (size_t)(size > 0 ? size : 0), f);
-        fclose(f);
+        code = read_whole(path, &size);
+        if (!code) { console_append("[could not read this file]\r\n\r\n"); continue; }
         started = start_run(hwnd, code, (size_t)size, leaf, FALSE);
         free(code);
         if (started) return;
@@ -1228,6 +1310,26 @@ static void run_all_files(HWND hwnd)
         MessageBoxA(hwnd, "There are no .adda files in this project to run.",
                     "Run All Files", MB_OK | MB_ICONINFORMATION);
         return;
+    }
+    {
+        static char all[16384];
+        char one[4096];
+        size_t used = 0;
+        int i;
+
+        all[0] = '\0';
+        for (i = 0; i < g_runCount; i++) {
+            long size;
+            char *code = read_whole(g_runPaths[i], &size);
+            const char *leaf = strrchr(g_runPaths[i], '\\');
+            if (!code) continue;
+            code_warnings(code, (size_t)size, one, sizeof one);
+            free(code);
+            if (one[0] && used < sizeof all)
+                used += (size_t)snprintf(all + used, sizeof all - used, "%s%s:\n%s",
+                                         used ? "\n\n" : "", leaf ? leaf + 1 : g_runPaths[i], one);
+        }
+        if (!ok_to_run(hwnd, all)) return;
     }
     SetWindowTextA(hwndConsole, "");
     g_anchor = 0;

@@ -1,0 +1,5 @@
+print a
+while true
+    print b
+end
+return (3)

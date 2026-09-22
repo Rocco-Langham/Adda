@@ -1,0 +1,4 @@
+tests/errors/goto_no_line.adda:2: there is no line 7 to go back to - the program ends on line 2
+     2 | return (7)
+       | ^
+exit: 65

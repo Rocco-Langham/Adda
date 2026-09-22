@@ -25,7 +25,9 @@ typedef struct Scope {
     uint32_t      count, cap;
 } Scope;
 
-typedef enum { FLOW_NORMAL, FLOW_RETURN } Flow;
+typedef enum { FLOW_NORMAL, FLOW_RETURN, FLOW_JUMP } Flow;
+
+static uint32_t jump_to;     /* FLOW_JUMP: the top-level statement to go on from */
 
 static Scope *globals;
 
@@ -753,6 +755,10 @@ static Flow exec(Node *n, Scope *sc, Value *ret)
             *ret = n->a ? eval(n->a, sc) : nothing_value();
             return FLOW_RETURN;
 
+        case N_GOTO:                       /* return (3): out of every block, to line 3 */
+            jump_to = (uint32_t)n->op;
+            return FLOW_JUMP;
+
         case N_ADD: {
             Value v = eval(n->a, sc);
             Value target;
@@ -833,9 +839,14 @@ void interp_init(void)
 void interp_run(Node *program)
 {
     Value ret = nothing_value();
+    uint32_t i = 0;
 
     hoist_functions(program);
-    exec(program, globals, &ret);
+    while (i < program->nkids) {
+        Flow f = exec(program->kids[i], globals, &ret);
+        if (f == FLOW_RETURN) break;       /* a bare return ends the program */
+        i = f == FLOW_JUMP ? jump_to : i + 1;
+    }
 }
 
 void interpret(Node *program)

@@ -26,6 +26,7 @@ typedef struct {
     int       in_condition;  /* bare words resolve softly inside a condition */
     int       depth;         /* block nesting; functions must be at depth 0 */
     int       interactive;   /* REPL: a bare expression is a statement */
+    int       in_define;     /* inside a function, return hands back a value */
 } P;
 
 /* A cursor over one token range, used while parsing an expression. */
@@ -294,6 +295,8 @@ static Node *build_template(P *p, const char *s, const char *e, bool quoted,
                 inner.i = 0;
                 inner.in_condition = p->in_condition;
                 inner.depth = p->depth;
+                inner.interactive = p->interactive;
+                inner.in_define = p->in_define;
 
                 cur.p = &inner;
                 cur.i = 0;
@@ -1131,8 +1134,42 @@ static Node *parse_define(P *p)
     }
 
     end_line(p, e);
+    p->in_define++;
     n->b = parse_block(p, STOP_END, "define", line);
+    p->in_define--;
     expect_end(p, "define", line);
+    return n;
+}
+
+/* return (3), outside a function: go back to line 3 and carry on from there.
+ * Which statement that is gets worked out once the whole program is read. */
+static Node *parse_goto(P *p, uint32_t s, uint32_t e)
+{
+    uint32_t line = p->t[s].line;
+    Token *num;
+    Node *n;
+
+    if (p->t[s + 1].kind == TK_NUMBER)
+        adda_error_at(p->t[s + 1].start, line,
+                      "to go back to line %.*s, put it in brackets: return (%.*s)",
+                      (int)p->t[s + 1].len, p->t[s + 1].start,
+                      (int)p->t[s + 1].len, p->t[s + 1].start);
+    num = &p->t[s + 2];
+    if (e != s + 4 || p->t[s + 3].kind != TK_RPAREN)
+        adda_error_at(p->t[s + 1].start, line,
+                      "write it as: return (3) - the number of the line to go back to");
+    if (num->number < 1 || num->number > 1e9 ||
+        (double)(uint32_t)num->number != num->number)
+        adda_error_at(num->start, line,
+                      "a line number is a whole number from 1 up, like return (1)");
+    if (p->interactive)
+        adda_error_at(p->t[s].start, line,
+                      "return (%.*s) goes back to a line of a program file - "
+                      "it does not work here", (int)num->len, num->start);
+
+    n = node(N_GOTO, line);
+    n->number = num->number;
+    end_line(p, e);
     return n;
 }
 
@@ -1228,7 +1265,12 @@ static Node *statement(P *p)
     if (word_at(p, s, "remove")) return parse_remove(p, s, e);
 
     if (word_at(p, s, "return")) {
-        Node *n = node(N_RETURN, line);
+        Node *n;
+        if (!p->in_define && e > s + 1 &&
+            (p->t[s + 1].kind == TK_NUMBER ||
+             (p->t[s + 1].kind == TK_LPAREN && s + 2 < e && p->t[s + 2].kind == TK_NUMBER)))
+            return parse_goto(p, s, e);
+        n = node(N_RETURN, line);
         if (e > s + 1) n->a = parse_run(p, s + 1, e);
         end_line(p, e);
         return n;
@@ -1279,8 +1321,116 @@ static Node *parse_block(P *p, int stops, const char *opener, uint32_t opener_li
             word_at(p, p->i + 1, "end")) return blk;
         if ((stops & STOP_ELSE) && word_at(p, p->i, "else")) return blk;
 
-        add_kid(blk, statement(p));
+        {
+            Node *kid = statement(p);
+            kid->last = p->i > 0 ? p->t[p->i - 1].line : kid->line;
+            if (kid->last < kid->line) kid->last = kid->line;
+            add_kid(blk, kid);
+        }
     }
+}
+
+/* ------------------------------------------------------ return (N): jumps */
+
+static const char *block_word(const Node *n)
+{
+    switch (n->kind) {
+    case N_IF:      return "if";
+    case N_WHILE:   return "while";
+    case N_FOREACH: return "for each";
+    case N_DEFINE:  return "define";
+    case N_DELAY:   return "delay";
+    case N_SHAPE:   return "insert";
+    default:        return NULL;
+    }
+}
+
+/* The first openApplication in `n`, not counting function bodies, which only
+ * run when they are called. */
+static Node *find_openapp(Node *n)
+{
+    Node *f = NULL;
+    uint32_t i;
+
+    if (!n || n->kind == N_DEFINE) return NULL;
+    if (n->kind == N_OPENAPP) return n;
+    if ((f = find_openapp(n->a)) || (f = find_openapp(n->b)) || (f = find_openapp(n->c)))
+        return f;
+    for (i = 0; i < n->nkids; i++)
+        if ((f = find_openapp(n->kids[i]))) return f;
+    return NULL;
+}
+
+/* Points each return (N) inside top-level statement `g` at the statement it
+ * goes back to. A jump that goes back over an openApplication keeps a note of
+ * it, for adda_warnings. */
+static void resolve_jumps(Node *prog, uint32_t g, Node *n)
+{
+    uint32_t i, want, t;
+
+    if (!n) return;
+    resolve_jumps(prog, g, n->a);
+    resolve_jumps(prog, g, n->b);
+    resolve_jumps(prog, g, n->c);
+    for (i = 0; i < n->nkids; i++) resolve_jumps(prog, g, n->kids[i]);
+    if (n->kind != N_GOTO) return;
+
+    want = (uint32_t)n->number;
+    if (want > prog->kids[prog->nkids - 1]->last)
+        adda_error(n->line, "there is no line %u to go back to - the program ends on line %u",
+                   want, prog->kids[prog->nkids - 1]->last);
+    for (t = 0; t < prog->nkids; t++) {
+        Node *k = prog->kids[t];
+        if (k->line >= want) break;           /* that line, or the next after a blank one */
+        if (want <= k->last) {
+            const char *w = block_word(k);
+            if (w)
+                adda_error(n->line, "line %u is inside the '%s' on line %u - return can only "
+                           "go back to a line that is not inside a block", want, w, k->line);
+            adda_error(n->line, "line %u is in the middle of the line that starts on line %u - "
+                       "go back to line %u instead", want, k->line, k->line);
+        }
+    }
+    n->op = (int)t;
+    n->flag = (n == prog->kids[g]);           /* not inside an if: nothing stops it */
+    n->a = NULL;
+    for (i = t; i <= g && i < prog->nkids && !n->a; i++)   /* going back: what repeats */
+        n->a = find_openapp(prog->kids[i]);
+}
+
+static void warn_jumps(Node *n, FILE *out, int *count)
+{
+    uint32_t i;
+
+    if (!n) return;
+    if (n->kind == N_GOTO) {
+        if (!n->a) return;
+        if (!out) { (*count)++; return; }         /* only counting */
+        fprintf(out, "%sLine %u: return (%u) goes back to line %u, so openApplication on "
+                "line %u runs again each time round.\n",
+                *count ? "\n" : "", n->line, (unsigned)n->number, (unsigned)n->number,
+                n->a->line);
+        fputs("  - It does not open another window each time: the same window is used "
+              "again.\n", out);
+        fputs("  - Everything printed or drawn keeps piling up in that window, on top of "
+              "what is already there.\n", out);
+        if (n->flag)
+            fputs("  - Nothing stops the return, so the program never ends by itself - press "
+                  "Stop or close the window to end it.\n", out);
+        (*count)++;
+        return;
+    }
+    warn_jumps(n->a, out, count);
+    warn_jumps(n->b, out, count);
+    warn_jumps(n->c, out, count);
+    for (i = 0; i < n->nkids; i++) warn_jumps(n->kids[i], out, count);
+}
+
+int adda_warnings(Node *program, FILE *out)
+{
+    int count = 0;
+    warn_jumps(program, out, &count);
+    return count;
 }
 
 Node *parse_mode(TokenList tokens, bool interactive)
@@ -1293,8 +1443,14 @@ Node *parse_mode(TokenList tokens, bool interactive)
     p.in_condition = 0;
     p.depth = 0;
     p.interactive = interactive ? 1 : 0;
+    p.in_define = 0;
 
-    return parse_block(&p, 0, "program", 1);
+    {
+        Node *prog = parse_block(&p, 0, "program", 1);
+        uint32_t g;
+        for (g = 0; g < prog->nkids; g++) resolve_jumps(prog, g, prog->kids[g]);
+        return prog;
+    }
 }
 
 Node *parse(TokenList tokens)

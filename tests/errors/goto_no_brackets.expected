@@ -1,0 +1,4 @@
+tests/errors/goto_no_brackets.adda:2: to go back to line 1, put it in brackets: return (1)
+     2 | return 1
+       |        ^
+exit: 65
