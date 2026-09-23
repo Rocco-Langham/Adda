@@ -2473,6 +2473,87 @@ static COLORREF code_colour(ColourKind k)
  * control put them - skipping the selection, which it highlights itself. The
  * tidy view's arrows are drawn bold, whether or not the code is coloured; the
  * font is fixed width, so a bold character fills exactly the same space. */
+/* A tidy-view arrow, drawn rather than typed.
+ *
+ * GDI will not antialias, so it goes into a memory bitmap at 4x and is scaled
+ * back down, the same trick the activity bar icons use. A branch turns the
+ * corner with a rounded bezier, so a `details` block reads as one line coming
+ * down and curving into each setting under it.
+ */
+static void draw_smooth_arrow(HDC dst, RECT box, BOOL branch, COLORREF ink, COLORREF bg)
+{
+    const int ss = 4;
+    int w = box.right - box.left, h = box.bottom - box.top;
+    int W = w * ss, H = h * ss, cy = H / 2, thick = H / 9;
+    int headW, headH, stopX;
+    HDC mem;
+    HBITMAP bm, oldBm;
+    HPEN pen, oldPen;
+    HBRUSH br, oldBr;
+    LOGBRUSH lb;
+    RECT all;
+    POINT head[3];
+
+    if (w <= 0 || h <= 0) return;
+    if (thick < 3) thick = 3;
+    headW = thick * 3;
+    headH = thick * 5 / 2;
+    stopX = W - headW - ss;
+    if (stopX < ss) stopX = ss;
+
+    mem = CreateCompatibleDC(dst);
+    bm = CreateCompatibleBitmap(dst, W, H);
+    oldBm = (HBITMAP)SelectObject(mem, bm);
+    all.left = 0; all.top = 0; all.right = W; all.bottom = H;
+    br = CreateSolidBrush(bg);
+    FillRect(mem, &all, br);
+    DeleteObject(br);
+
+    lb.lbStyle = BS_SOLID; lb.lbColor = ink; lb.lbHatch = 0;
+    pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_FLAT | PS_JOIN_ROUND,
+                       thick, &lb, 0, NULL);
+    oldPen = (HPEN)SelectObject(mem, pen);
+    br = CreateSolidBrush(ink);
+    oldBr = (HBRUSH)SelectObject(mem, br);
+
+    if (branch) {
+        /* down the left, then a rounded turn to the right */
+        int x = W / 6, r = H / 3;
+        POINT curve[4];
+        MoveToEx(mem, x, 0, NULL);
+        LineTo(mem, x, cy - r);
+        curve[0].x = x;     curve[0].y = cy - r;
+        curve[1].x = x;     curve[1].y = cy;
+        curve[2].x = x;     curve[2].y = cy;
+        curve[3].x = x + r; curve[3].y = cy;
+        PolyBezier(mem, curve, 4);
+        MoveToEx(mem, x + r, cy, NULL);
+        LineTo(mem, stopX, cy);
+    } else {
+        MoveToEx(mem, 0, cy, NULL);
+        LineTo(mem, stopX, cy);
+    }
+
+    head[0].x = W - ss;        head[0].y = cy;
+    head[1].x = W - ss - headW; head[1].y = cy - headH;
+    head[2].x = W - ss - headW; head[2].y = cy + headH;
+    SelectObject(mem, GetStockObject(NULL_PEN));
+    Polygon(mem, head, 3);
+
+    SelectObject(mem, oldPen);
+    SelectObject(mem, oldBr);
+    DeleteObject(pen);
+    DeleteObject(br);
+
+    SetStretchBltMode(dst, HALFTONE);
+    SetBrushOrgEx(dst, 0, 0, NULL);
+    StretchBlt(dst, box.left, box.top, w, h, mem, 0, 0, W, H, SRCCOPY);
+
+    SelectObject(mem, oldBm);
+    DeleteObject(bm);
+    DeleteDC(mem);
+}
+
 static void paint_colours(HWND h)
 {
     RECT rc;
@@ -2514,6 +2595,26 @@ static void paint_colours(HWND h)
         int i, from = (int)sp[k].start, to = (int)(sp[k].start + sp[k].len);
         if (to <= first || from >= last) continue;
         if (!g_colours && sp[k].kind != COL_ARROW) continue;   /* colouring turned off */
+
+        /* An arrow is drawn, not typed: dashes and a > never join up into a
+         * line. The characters underneath keep the space, and a smooth arrow
+         * is painted over them - a curve into the line for a branch. */
+        if (sp[k].kind == COL_ARROW && from >= first && to <= last &&
+            !((DWORD)to > selA && (DWORD)from < selB)) {
+            LRESULT a = SendMessageA(h, EM_POSFROMCHAR, (WPARAM)from, 0);
+            LRESULT b = SendMessageA(h, EM_POSFROMCHAR, (WPARAM)to, 0);
+            if (a != -1 && b != -1 && (short)HIWORD(a) == (short)HIWORD(b) &&
+                (short)LOWORD(a) >= GUTTER_W && (short)LOWORD(b) > (short)LOWORD(a)) {
+                RECT box;
+                BOOL branch = (text[from] == '|' || (unsigned char)text[from] == 0xE2);
+                box.left = (short)LOWORD(a);
+                box.right = (short)LOWORD(b);
+                box.top = (short)HIWORD(a);
+                box.bottom = box.top + lineH;
+                draw_smooth_arrow(dc, box, branch, code_colour(COL_ARROW), g_t.surface);
+                continue;
+            }
+        }
         SelectObject(dc, sp[k].kind == COL_ARROW ? hFontCodeBold : hFontCode);
         SetTextColor(dc, code_colour(sp[k].kind));
         for (i = from < first ? first : from; i < to && i < last; i++) {
