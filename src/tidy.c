@@ -96,6 +96,34 @@ static bool contains(const char *s, const char *e, const char *what)
     return false;
 }
 
+/* Every spelling of the long arrow and the branch that could be sitting in a
+ * file: this machine's code page, the Mac's UTF-8, and the plain-ASCII
+ * fallback used where em dashes cannot be shown. */
+static const char *const ARROWS[] = {
+    "\x97\x97>",                        /* Windows-1252 em dashes */
+    "\xe2\x80\x94\xe2\x80\x94>",        /* UTF-8 em dashes, as the Mac writes */
+    "==>",                              /* where neither can be drawn */
+    NULL
+};
+static const char *const BRANCHES[] = {
+    "|\x97>", "|\xe2\x80\x94>", "|->", NULL
+};
+
+/* Turning the tidy view off has to give the code back whatever put the arrows
+ * there. If the text holds an arrow this build would not have written - a file
+ * from the other GUI, a different code page, something pasted in - then going
+ * by our own spelling alone leaves those lines tidied for ever, and they get
+ * saved and run exactly as shown. So for the way back, take the arrow the text
+ * actually uses. */
+static const char *arrow_in(const char *text, const char *mine, const char *const *all)
+{
+    int i;
+    if (mine && strstr(text, mine)) return mine;
+    for (i = 0; all[i]; i++)
+        if (strstr(text, all[i])) return all[i];
+    return mine;
+}
+
 /* ────────────────────────────────────────────── the first line ── */
 
 /* insert <shape>; name = [x]  - fills in where the shape words and the name
@@ -749,7 +777,14 @@ int tidy_edits(const char *text, const char *arrow, const char *branch, long car
                bool on, TidyEdit *out, int max)
 {
     Line *ls = NULL;
-    int n = split_lines(text, &ls), i = 0, count = 0;
+    int n, i = 0, count = 0;
+
+    /* going back to raw, follow the arrow the text really has */
+    if (!on) {
+        arrow  = arrow_in(text, arrow, ARROWS);
+        branch = arrow_in(text, branch, BRANCHES);
+    }
+    n = split_lines(text, &ls);
 
     while (i < n && count < max) {
         int j;

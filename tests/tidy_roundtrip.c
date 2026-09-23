@@ -68,6 +68,24 @@ static void roundtrip(const char *name, const char *raw)
     free(back);
 }
 
+/* Turning the tidy view off has to give the code back whatever wrote the
+ * arrows - this build, the other GUI, or a different code page. If it does
+ * not, the line stays tidied and is saved and run exactly as shown, which is
+ * how `print ——> hello` ended up being printed with its arrow. */
+static void untidies(const char *name, const char *tidied, const char *want)
+{
+    char *back = tidy_raw(tidied, ARROW, BRANCH);
+
+    if (strcmp(back, want) != 0) {
+        failures++;
+        printf("FAIL %s\n", name);
+        show("tidy", tidied);
+        show("back", back);
+        show("want", want);
+    }
+    free(back);
+}
+
 int main(void)
 {
     /* everyday lines */
@@ -106,6 +124,15 @@ int main(void)
     /* text that looks like the tidy view's own marks */
     roundtrip("ascii arrow",   "print a ==> b\n");
     roundtrip("em arrow",      "print a \x97\x97> b\n");
+
+    /* arrows this build would not itself have written */
+    untidies("cp1252 arrow", "print \x97\x97> hello\n", "print hello\n");
+    untidies("utf-8 arrow",  "print \xe2\x80\x94\xe2\x80\x94> hello\n", "print hello\n");
+    untidies("ascii arrow",  "print ==> hello\n", "print hello\n");
+    untidies("utf-8 assign", "greeting \xe2\x80\x94\xe2\x80\x94> Rocco\n",
+                             "[greeting] = Rocco\n");
+    untidies("utf-8 branch", "delay - 500\n|\xe2\x80\x94>print hi\nend\n",
+                             "delay - 500\n    print hi\nend\n");
 
     if (failures) {
         printf("\ntidy round-trip: %d failed\n", failures);
