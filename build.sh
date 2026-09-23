@@ -52,7 +52,10 @@ elif [ "$(uname -s)" = "Darwin" ]; then
         -c src/window_mac.m -o window_mac.o
     "$CC" $WARN $DEFS $FLAGS -o adda $CORE window_mac.o -lm -framework Cocoa
 else
-    "$CC" $WARN $DEFS $FLAGS -o adda $CORE src/window_none.c -lm
+    # -std=c99 alone hides isatty and fileno on Linux, which are POSIX rather
+    # than C, so the version of POSIX to expose is asked for by name.
+    "$CC" $WARN $DEFS -D_POSIX_C_SOURCE=200809L $FLAGS \
+        -o adda $CORE src/window_none.c -lm
 fi
 echo "built ./adda ($MODE)"
 
