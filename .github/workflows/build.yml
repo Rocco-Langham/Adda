@@ -1,0 +1,47 @@
+# Builds Adda on each machine it is meant to run on, and runs the tests.
+#
+# The Mac build is the point of this: gui_mac.m is Objective-C, which needs
+# Apple's own compiler and frameworks, so it cannot be built on a PC. Without
+# this, a change to the Mac window is only ever checked by reading it.
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: ./build.sh
+      - name: Tests
+        run: ./tests/run.sh
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: Build
+        run: ./build.sh
+      - name: Tests
+        run: ./tests/run.sh
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: ./build.sh            # the interpreter only: there is no GUI here
+      - name: Tests
+        run: ./tests/run.sh
