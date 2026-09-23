@@ -144,6 +144,9 @@ static HWND  hwndCheatFind;
 /* 0: your code. 1: the cheat sheet. Both live in the editor area. */
 static int   g_tab;
 static RECT  g_tabRect[2];
+static RECT  g_tabX[2];           /* the x that shuts each one */
+static int   g_tabXHot = -1;      /* the x under the pointer, or -1 */
+static BOOL  g_cheatTab;          /* is the cheat sheet tab open at all */
 
 static HBRUSH hBrushBg, hBrushSurface, hBrushAb;
 static HFONT  hFontMono, hFontCode, hFontCodeBold, hFontUI, hFontUIBold, hFontSmall;
@@ -152,7 +155,7 @@ static int    g_dpi = 96;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR,
-       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW, ICON_TIDY };
+       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW, ICON_TIDY, ICON_CLOSE };
 /* New project, Run and Stop sit under Search; Check, Cheat sheet and Settings are pinned
  * to the bottom. Everything before AB_CHECK stacks from the top. */
 enum { AB_EXPLORER = 0, AB_SEARCH, AB_NEW, AB_RUN, AB_STOP, AB_TIDY, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
@@ -555,6 +558,16 @@ static void icon_shape(HDC dc, int kind, int side, COLORREF fg, COLORREF bg)
         break;
     }
 
+    case ICON_CLOSE: {
+        /* the x that shuts a tab */
+        POINT one[2], two[2];
+        one[0] = NP(30, 30, side); one[1] = NP(70, 70, side);
+        two[0] = NP(70, 30, side); two[1] = NP(30, 70, side);
+        Polyline(dc, one, 2);
+        Polyline(dc, two, 2);
+        break;
+    }
+
     case ICON_STOP: {
         int a = MulDiv(24, side, 100), b = MulDiv(76, side, 100);
         RoundRect(dc, a, a, b, b, side / 10, side / 10);
@@ -797,6 +810,13 @@ static void text_at(HDC hdc, RECT r, const char *s, HFONT font,
 static BOOL contains(RECT r, POINT p)
 {
     return p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom;
+}
+
+/* Your code only shows an x once it is a file: with nothing open there is
+ * nothing to put away, and shutting it would throw away what was typed. */
+static BOOL tab_x_shown(int t)
+{
+    return t == 1 ? g_cheatTab : g_curPath[0] != '\0';
 }
 
 /* case-insensitive substring */
@@ -2061,7 +2081,7 @@ static void layout(HWND hwnd)
 
     /* the tab strip, and the cheat sheet's area underneath it */
     {
-        int tabH = S(30), tw = S(150);
+        int tabH = S(30), tw = S(150), t;
         g_tabRect[0].left = x + pad;
         g_tabRect[0].right = g_tabRect[0].left + tw;
         g_tabRect[0].top = S(4);
@@ -2069,6 +2089,17 @@ static void layout(HWND hwnd)
         g_tabRect[1] = g_tabRect[0];
         g_tabRect[1].left = g_tabRect[0].right + S(4);
         g_tabRect[1].right = g_tabRect[1].left + tw;
+        if (!g_cheatTab) SetRectEmpty(&g_tabRect[1]);   /* shut, so not there */
+
+        for (t = 0; t < 2; t++) {                       /* the x on each tab */
+            int side = S(16);
+            g_tabX[t] = g_tabRect[t];
+            g_tabX[t].right  = g_tabRect[t].right - S(8);
+            g_tabX[t].left   = g_tabX[t].right - side;
+            g_tabX[t].top    = g_tabRect[t].top + (tabH - side) / 2;
+            g_tabX[t].bottom = g_tabX[t].top + side;
+            if (IsRectEmpty(&g_tabRect[t])) SetRectEmpty(&g_tabX[t]);
+        }
 
         g_cheatArea.left = x + pad;
         g_cheatArea.right = rc.right - pad;
@@ -3007,14 +3038,26 @@ static void paint_main(HWND hwnd, HDC hdc)
         names[0] = fileTab;
         names[1] = "Cheat sheet";
 
-        for (t = 0; t < 2; t++) {
-            RECT tab = g_tabRect[t];
+        for (t = 0; t < (g_cheatTab ? 2 : 1); t++) {
+            RECT tab = g_tabRect[t], label = tab;
             BOOL on = (g_tab == t);
-            round_fill(hdc, tab, on ? g_t.surface : g_t.bg, RADIUS);
+            COLORREF face = on ? g_t.surface : g_t.bg;
+            round_fill(hdc, tab, face, RADIUS);
             if (on) round_frame(hdc, tab, g_t.border, RADIUS);
-            text_at(hdc, tab, names[t], on ? hFontUIBold : hFontUI,
+            if (tab_x_shown(t))
+                label.right = g_tabX[t].left;    /* the name keeps clear of it */
+            text_at(hdc, label, names[t], on ? hFontUIBold : hFontUI,
                     on ? g_t.text : g_t.muted,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            if (tab_x_shown(t)) {
+                COLORREF bg = face;
+                if (g_tabXHot == t) {            /* a pill under the pointer */
+                    bg = g_t.ghostHot;
+                    round_fill(hdc, g_tabX[t], bg, S(4));
+                }
+                draw_icon(hdc, g_tabX[t], ICON_CLOSE,
+                          g_tabXHot == t ? g_t.text : g_t.muted, bg);
+            }
         }
     }
 
@@ -4033,6 +4076,7 @@ static void ab_click(HWND hwnd, int item)
         check_code();
         break;
     case AB_CHEAT:
+        g_cheatTab = TRUE;
         g_tab = 1;
         refresh_cheats();
         layout(hwnd);
@@ -4201,7 +4245,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         {
-            int bar = bar_hit(p);
+            int bar = bar_hit(p), x = -1, t;
+            for (t = 0; t < 2; t++)
+                if (tab_x_shown(t) && contains(g_tabX[t], p)) x = t;
+            if (x != g_tabXHot) {
+                g_tabXHot = x;
+                InvalidateRect(hwnd, &g_tabRect[0], FALSE);
+                if (g_cheatTab) InvalidateRect(hwnd, &g_tabRect[1], FALSE);
+            }
             if (bar != g_barHot) {
                 g_barHot = bar;
                 start_anim(hwnd);
@@ -4224,6 +4275,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_MOUSELEAVE:
         g_abHot = -1;
         g_barHot = -1;
+        if (g_tabXHot >= 0) { g_tabXHot = -1; InvalidateRect(hwnd, NULL, FALSE); }
         start_anim(hwnd);
         return 0;
 
@@ -4298,6 +4350,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         p.x = GET_X_LPARAM(lParam);
         p.y = GET_Y_LPARAM(lParam);
+
+        /* the x on a tab, which has to be tried before the tab itself */
+        for (at = 0; at < 2; at++) {
+            if (!tab_x_shown(at) || !contains(g_tabX[at], p)) continue;
+            if (at == 0) {
+                close_file();                 /* saved, and out of the editor */
+            } else {
+                g_cheatTab = FALSE;
+                g_tab = 0;
+                SetFocus(hwndCode);
+            }
+            g_tabXHot = -1;
+            layout(hwnd);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
 
         /* the tab strip */
         if (contains(g_tabRect[0], p) || contains(g_tabRect[1], p)) {
