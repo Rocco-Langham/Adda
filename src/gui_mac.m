@@ -521,7 +521,6 @@ static void find_arrows(void)
 
         {
             ArrowRun *r = &g_arrowRuns[g_arrowCount++];
-            unsigned char c0 = (unsigned char)utf8[sp[i].start];
             size_t q = sp[i].start + sp[i].len;
             r->from = from;
             r->len = at - from;
