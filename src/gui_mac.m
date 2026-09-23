@@ -219,12 +219,42 @@ static NSRect  g_splitHit;            /* the whole gap between code and console 
 static NSRect  g_panelRect;
 static NSRect  g_findBox;             /* the frame drawn round the find field */
 
-/* 0: your code. 1: the cheat sheet. Both live in the editor area. */
+/* The tabs along the top of the editor: one for each open file, then the
+ * cheat sheet's when it is open. g_tab is the one showing; the cheat sheet's
+ * is always numbered just past the last file. */
+#define MAX_TABS 12
 static int     g_tab;
-static NSRect  g_tabRect[2];
-static NSRect  g_tabX[2];             /* the x that shuts each one */
+static NSRect  g_tabRect[MAX_TABS + 1];
+static NSRect  g_tabX[MAX_TABS + 1];  /* the x that shuts each one */
 static int     g_tabXHot = -1;        /* the x under the pointer, or -1 */
 static BOOL    g_cheatTab;            /* is the cheat sheet tab open at all */
+static int     g_fileTab;             /* the file tab in the editor, even under the cheat sheet */
+
+/* Each open file. The one in the editor lives there - g_curPath, g_dirty and
+ * the text itself - and its entry here is brought up to date when it is left.
+ * The others keep what the editor showed, so switching back finds it exactly
+ * as it was, tidy view, caret and all. */
+@interface OpenTab : NSObject
+@property (copy) NSString *path;      /* nil for the untitled one */
+@property (copy) NSString *text;      /* what it showed, while it is not showing */
+@property BOOL dirty;
+@property NSRange caret;
+@end
+@implementation OpenTab
+@end
+
+static NSMutableArray<OpenTab *> *g_openTabs;
+
+/* The open files, starting with one untitled tab */
+static NSMutableArray<OpenTab *> *open_tabs(void)
+{
+    if (!g_openTabs) g_openTabs = [NSMutableArray arrayWithObject:[OpenTab new]];
+    return g_openTabs;
+}
+static int  open_count(void) { return (int)open_tabs().count; }
+static int  tab_count(void)  { return open_count() + (g_cheatTab ? 1 : 0); }
+static BOOL is_cheats(int t) { return g_cheatTab && t == open_count(); }
+static BOOL on_cheats(void)  { return is_cheats(g_tab); }
 
 /* ── the running program ─────────────────────────────────────────── */
 static pid_t          g_pid;
@@ -275,9 +305,22 @@ static NSScrollView *g_cheatListScroll;
 
 /* Your code only shows an x once it is a file: with nothing open there is
  * nothing to put away, and shutting it would throw away what was typed. */
+static NSString *tab_path(int t)
+{
+    if (t < 0 || t >= open_count()) return nil;
+    return t == g_fileTab ? g_curPath : open_tabs()[(NSUInteger)t].path;
+}
+
 static BOOL tab_x_shown(int t)
 {
-    return t == 1 ? g_cheatTab : g_curPath != nil;
+    return is_cheats(t) || tab_path(t) != nil;
+}
+
+/* What tab t is called: the file's own name, or "Your code" */
+static NSString *tab_name(int t)
+{
+    if (is_cheats(t)) return @"Cheat sheet";
+    return tab_path(t) ? tab_path(t).lastPathComponent : @"Your code";
 }
 
 static void apply_theme(void);
@@ -1281,8 +1324,8 @@ static BOOL ok_to_run(NSString *warnings)
  * cheat sheet tab the output has nowhere to show. */
 static void show_code_tab(void)
 {
-    if (g_tab == 0) return;
-    g_tab = 0;
+    if (!on_cheats()) return;
+    g_tab = g_fileTab;
     layout();
 }
 
@@ -1526,18 +1569,6 @@ static void show_current(void)
     g_main.needsDisplay = YES;        /* the tab is named after the file */
 }
 
-/* Puts the open file away: saved, and out of the editor. */
-static void close_file(void)
-{
-    save_current();
-    g_curPath = nil;
-    g_code.string = @"";
-    g_dirty = NO;
-    [g_code.undoManager removeAllActions];
-    g_codeScroll.verticalRulerView.needsDisplay = YES;
-    clear_check();
-    show_current();
-}
 
 /* UTF-8 byte offset to a character index in `s` */
 static NSUInteger chars_at(const char *utf8, size_t bytes)
@@ -1612,34 +1643,184 @@ static void toggle_tidy(void)
     g_main.needsDisplay = YES;
 }
 
-static void open_file(NSString *path)
+/* ═══════════════════════════════════════════════════════ tabs ══ */
+
+static void select_by_path(NSString *path);
+static void reveal(NSString *path);
+
+/* A file's text, or nil if it cannot be read */
+static NSString *read_file(NSString *path)
 {
-    NSData *data;
+    NSData *data = [NSData dataWithContentsOfFile:path];
     NSString *text;
-    BOOL isDir = NO;
-
-    if (!path) return;
-    if ([NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDir] && isDir) return;
-    if (g_curPath && [path isEqualToString:g_curPath]) return;   /* already open */
-    save_current();
-
-    data = [NSData dataWithContentsOfFile:path];
-    if (!data) return;
+    if (!data) return nil;
     text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     if (!text) text = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
+    return text;
+}
 
-    g_code.string = text;
-    g_curPath = path;
-    g_dirty = NO;
-    dispatch_async(dispatch_get_main_queue(), ^{ tidy_update(); });
-    show_current();
-    g_codeScroll.verticalRulerView.needsDisplay = YES;
-    clear_check();
+/* Takes the editor back into the file tab it belongs to: saved, and its
+ * text, dirty flag and caret kept for when it comes back. */
+static void leave_tab(void)
+{
+    OpenTab *o = open_tabs()[(NSUInteger)g_fileTab];
+
+    save_current();
+    o.path = g_curPath;                   /* Save As may have moved it */
+    o.text = g_code.string;
+    o.dirty = g_dirty;
+    o.caret = g_code.selectedRange;
+}
+
+/* Puts file tab t into the editor. Whatever the editor held must already
+ * have been left, or be meant to go. */
+static void enter_tab(int t)
+{
+    OpenTab *o = open_tabs()[(NSUInteger)t];
+    NSString *text = o.text;
+    NSRange caret = o.caret;
+
+    o.text = nil;
+    if (!text && o.path) text = read_file(o.path);
+    g_code.string = text ? text : @"";
+    g_curPath = o.path;
+    g_dirty = o.dirty;
+    g_typing = NO;                        /* arriving is not typing */
+    clear_check();                        /* the marks were on the other text */
     style_text(g_code);
     /* the old undo steps point into text that has gone */
     [g_code.undoManager removeAllActions];
-    g_code.selectedRange = NSMakeRange(0, 0);
-    [g_code scrollRangeToVisible:g_code.selectedRange];
+    if (NSMaxRange(caret) > g_code.string.length) caret = NSMakeRange(0, 0);
+    g_code.selectedRange = caret;
+    [g_code scrollRangeToVisible:caret];
+    g_codeScroll.verticalRulerView.needsDisplay = YES;
+    g_tab = g_fileTab = t;
+    show_current();
+    dispatch_async(dispatch_get_main_queue(), ^{ tidy_update(); });
+
+    /* the Explorer follows along, and shows nothing picked for "Your code" */
+    if (g_curPath) {
+        reveal(g_curPath);
+        select_by_path(g_curPath);
+    } else {
+        g_quiet = YES;
+        [g_files deselectAll:nil];
+        g_quiet = NO;
+    }
+}
+
+static void switch_tab(int t)
+{
+    if (t < 0 || t >= tab_count()) return;
+    if (is_cheats(t)) {
+        if (!on_cheats()) refresh_cheats();
+        g_tab = t;
+    } else if (t != g_fileTab) {
+        leave_tab();
+        enter_tab(t);
+    } else {
+        g_tab = t;                        /* back from the cheat sheet */
+    }
+    g_tabXHot = -1;
+    layout();
+    [g_win makeFirstResponder:!on_cheats() ? (NSResponder *)g_code
+                            : g_cheatOpen  ? (NSResponder *)g_cheatsView
+                                           : (NSResponder *)g_cheatFind];
+}
+
+/* The tab holding `path`, or -1 */
+static int tab_of(NSString *path)
+{
+    int i;
+    for (i = 0; path && i < open_count(); i++)
+        if ([tab_path(i) isEqualToString:path]) return i;
+    return -1;
+}
+
+/* Opens `path` in a tab: its own if it has one already. Otherwise a new one,
+ * unless the untitled tab is sitting there empty, which it takes over. */
+static void open_file(NSString *path)
+{
+    BOOL isDir = NO;
+    OpenTab *o = [OpenTab new];
+    int t;
+
+    if (!path) return;
+    if ([NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDir] && isDir) return;
+    if ((t = tab_of(path)) >= 0) { switch_tab(t); return; }
+    if (!read_file(path)) return;         /* nothing is disturbed for a file we cannot read */
+
+    o.path = path;
+    if (!g_curPath && g_code.string.length == 0) {
+        t = g_fileTab;                    /* nothing in it to keep */
+    } else {
+        leave_tab();
+        if (open_count() < MAX_TABS) {
+            [open_tabs() addObject:o];
+            t = open_count() - 1;
+        } else {
+            t = g_fileTab;                /* full: the one showing makes way */
+        }
+    }
+    open_tabs()[(NSUInteger)t] = o;
+    enter_tab(t);
+    g_tabXHot = -1;
+    layout();
+}
+
+/* Takes tab t away. `keep` saves it first; a deleted file's tab must not be,
+ * or the file would come straight back. With every file shut, one untitled
+ * tab is left, so there is always somewhere to type. */
+static void drop_tab(int t, BOOL keep)
+{
+    BOOL showing = (t == g_fileTab), wasCheats = on_cheats();
+
+    if (t < 0 || t >= open_count()) return;
+    if (showing && keep) save_current();
+    [open_tabs() removeObjectAtIndex:(NSUInteger)t];
+
+    if (open_count() == 0) {              /* the last one: an empty untitled tab */
+        [open_tabs() addObject:[OpenTab new]];
+        enter_tab(0);
+    } else if (showing) {
+        g_dirty = NO;                     /* nothing left to save it into */
+        enter_tab(t < open_count() ? t : open_count() - 1);
+    } else if (t < g_fileTab) {
+        g_fileTab--;
+    }
+    g_tab = wasCheats ? open_count() : g_fileTab;
+    g_tabXHot = -1;
+    layout();
+}
+
+/* The x on a tab */
+static void close_tab(int t)
+{
+    if (is_cheats(t)) {
+        g_cheatTab = NO;
+        g_tab = g_fileTab;
+        g_tabXHot = -1;
+        layout();
+        [g_win makeFirstResponder:g_code];
+        return;
+    }
+    drop_tab(t, YES);
+    if (!on_cheats()) [g_win makeFirstResponder:g_code];
+}
+
+/* Puts every open file away, saved, leaving one empty untitled tab. */
+static void close_all_files(void)
+{
+    BOOL wasCheats = on_cheats();
+
+    save_current();
+    [open_tabs() removeAllObjects];
+    [open_tabs() addObject:[OpenTab new]];
+    g_curPath = nil;
+    g_dirty = NO;
+    enter_tab(0);
+    if (wasCheats) g_tab = open_count();
+    layout();
 }
 
 /* ══════════════════════════════════════ renaming and deleting ══ */
@@ -1723,11 +1904,21 @@ static void end_rename(NSString *from, NSString *typed)
         return;
     }
 
-    /* the open file moves with it, or with the folder it is in */
-    if (g_curPath && [g_curPath isEqualToString:from])
-        g_curPath = target;
-    else if (g_curPath && [g_curPath hasPrefix:[from stringByAppendingString:@"/"]])
-        g_curPath = [target stringByAppendingString:[g_curPath substringFromIndex:from.length]];
+    /* each open file moves with it, or with the folder it is in */
+    {
+        int i;
+        for (i = 0; i < open_count(); i++) {
+            NSString *p = tab_path(i), *moved = nil;
+            if (!p) continue;
+            if ([p isEqualToString:from])
+                moved = target;
+            else if ([p hasPrefix:[from stringByAppendingString:@"/"]])
+                moved = [target stringByAppendingString:[p substringFromIndex:from.length]];
+            if (!moved) continue;
+            if (i == g_fileTab) g_curPath = moved;
+            else open_tabs()[(NSUInteger)i].path = moved;
+        }
+    }
     show_current();
 
     rescan_files();
@@ -1805,12 +1996,16 @@ static void delete_file(NSInteger row)
     a.buttons[1].keyEquivalent = @"\r";
     if ([a runModal] != NSAlertFirstButtonReturn) return;
 
-    /* the open file is going: it must not be written back afterwards */
-    if (g_curPath && ([g_curPath isEqualToString:path] ||
-                      [g_curPath hasPrefix:[path stringByAppendingString:@"/"]])) {
-        g_curPath = nil;
-        g_dirty = NO;
-        show_current();
+    /* the tabs of what is going go with it, unsaved: they must not be written
+     * back afterwards. Last first, so the numbers of the rest hold still. */
+    {
+        int i;
+        for (i = open_count() - 1; i >= 0; i--) {
+            NSString *p = tab_path(i);
+            if (p && ([p isEqualToString:path] ||
+                      [p hasPrefix:[path stringByAppendingString:@"/"]]))
+                drop_tab(i, NO);
+        }
     }
 
     if (![NSFileManager.defaultManager trashItemAtURL:[NSURL fileURLWithPath:path]
@@ -1962,7 +2157,7 @@ static void open_project(NSString *dir)
     NSString *first = nil;
     BOOL sub = NO;
 
-    close_file();
+    close_all_files();
     g_home = dir.stringByStandardizingPath;
     remember_project();
     g_view = AB_EXPLORER;
@@ -2163,17 +2358,24 @@ static void layout(void)
 
     /* the tab strip above the editor */
     {
-        CGFloat tabH = 30, tw = 150;
-        int t;
-        g_tabRect[0] = NSMakeRect(x + pad, 4, tw, tabH);
-        g_tabRect[1] = NSMakeRect(NSMaxX(g_tabRect[0]) + 4, 4, tw, tabH);
-        if (!g_cheatTab) g_tabRect[1] = NSZeroRect;     /* shut, so not there */
+        /* as wide as a name wants, until there are too many to fit, and then
+         * they share the width between them */
+        CGFloat tabH = 30, gap = 4, left = x + pad, room = w - pad * 2, tw;
+        int n = tab_count(), t;
+        tw = floor((room - gap * (n - 1)) / (n ? n : 1));
+        if (tw > 170) tw = 170;
+        if (tw < 64)  tw = 64;
 
-        for (t = 0; t < 2; t++) {                       /* the x on each tab */
+        for (t = 0; t <= MAX_TABS; t++) {
             CGFloat side = 16;
-            g_tabX[t] = NSMakeRect(NSMaxX(g_tabRect[t]) - 8 - side,
+            if (t >= n) {                               /* no such tab */
+                g_tabRect[t] = NSZeroRect;
+                g_tabX[t] = NSZeroRect;
+                continue;
+            }
+            g_tabRect[t] = NSMakeRect(left + t * (tw + gap), 4, tw, tabH);
+            g_tabX[t] = NSMakeRect(NSMaxX(g_tabRect[t]) - 8 - side,   /* the x on each tab */
                                    NSMinY(g_tabRect[t]) + (tabH - side) / 2, side, side);
-            if (NSIsEmptyRect(g_tabRect[t])) g_tabX[t] = NSZeroRect;
         }
     }
 
@@ -2223,10 +2425,10 @@ static void layout(void)
     g_consoleScroll.frame = sized(x + pad, y + codeH + splitH, w - pad * 2, consoleH - below);
 
     /* the cheat sheet has the editor area to itself while its tab is showing */
-    g_codeScroll.hidden    = (g_tab == 1);
-    g_consoleScroll.hidden = (g_tab == 1);
-    g_cheatsView.hidden    = (g_tab != 1);
-    if (g_tab == 1 && g_cheatsView) {
+    g_codeScroll.hidden    = on_cheats();
+    g_consoleScroll.hidden = on_cheats();
+    g_cheatsView.hidden    = !on_cheats();
+    if (on_cheats() && g_cheatsView) {
         NSRect b;
         g_cheatsView.frame = sized(x + pad, y, w - pad * 2, h - below);
         b = g_cheatsView.bounds;
@@ -2345,22 +2547,18 @@ static void paint_main(void)
 
     /* the tab strip, and the cheat sheet when it is the one showing */
     {
-        NSString *names[2];
         int t;
 
-        names[0] = g_curPath ? g_curPath.lastPathComponent : @"Your code";
-        names[1] = @"Cheat sheet";
-
-        for (t = 0; t < (g_cheatTab ? 2 : 1); t++) {
-            NSRect tab = g_tabRect[t], label = tab;
+        for (t = 0; t < tab_count(); t++) {
+            NSRect tab = g_tabRect[t], label = NSInsetRect(tab, 8, 0);
             BOOL on = (g_tab == t);
             unsigned face = on ? g_t.surface : g_t.bg;
 
             round_fill(tab, face, RADIUS);
             if (on) round_frame(tab, g_t.border, RADIUS);
-            if (tab_x_shown(t))
-                label.size.width = NSMinX(g_tabX[t]) - NSMinX(tab);
-            text_at(label, names[t], on ? g_fontUIBold : g_fontUI,
+            if (tab_x_shown(t))                 /* the name keeps clear of the x */
+                label.size.width = NSMinX(g_tabX[t]) - NSMinX(label);
+            text_at(label, tab_name(t), on ? g_fontUIBold : g_fontUI,
                     on ? g_t.text : g_t.muted, T_CENTER | T_VCENTER);
             if (tab_x_shown(t)) {
                 unsigned bg = face;
@@ -2373,7 +2571,7 @@ static void paint_main(void)
         }
     }
 
-    if (g_tab == 1) {
+    if (on_cheats()) {
         round_frame(NSInsetRect(g_cheatsView.frame, -1, -1), g_t.border, RADIUS_BIG);
         return;                       /* the editor is not showing */
     }
@@ -2706,14 +2904,14 @@ static void build_cheats(void)
 static void open_cheats(void)
 {
     build_cheats();
-    if (g_tab != 1) {
+    if (!on_cheats()) {
         g_cheatPage = 0;                 /* always opens on the list of topics */
         g_cheatFind.stringValue = @"";
         show_cheat(NULL);
         refresh_cheats();
     }
     g_cheatTab = YES;
-    g_tab = 1;
+    g_tab = open_count();
     layout();
     if (!g_cheatOpen) [g_win makeFirstResponder:g_cheatFind];
 }
@@ -2721,19 +2919,13 @@ static void open_cheats(void)
 /* Puts the cheat sheet away. The button in the activity bar brings it back. */
 static void close_cheats(void)
 {
-    g_cheatTab = NO;
-    g_tab = 0;
-    g_tabXHot = -1;
-    layout();
-    [g_win makeFirstResponder:g_code];
+    close_tab(open_count());
 }
 
 /* Esc: back to your code, with the tab left where it was. */
 static void leave_cheats(void)
 {
-    g_tab = 0;
-    layout();
-    [g_win makeFirstResponder:g_code];
+    switch_tab(g_fileTab);
 }
 
 /* ═════════════════════════════════════════════════ main window ══ */
@@ -2969,7 +3161,8 @@ static void build_menu(void)
     add(m, @"New File", @selector(newFile:), @"n", CMD, g_adda);
     add(m, @"New Folder", @selector(newFolder:), @"n", CMD | SHIFT, g_adda);
     [m addItem:NSMenuItem.separatorItem];
-    add(m, @"Close Window", @selector(performClose:), @"w", CMD, nil);
+    add(m, @"Close Tab", @selector(closeTab:), @"w", CMD, g_adda);
+    add(m, @"Close Window", @selector(performClose:), @"w", CMD | SHIFT, nil);
 
     /* without these, Cmd+C and friends do nothing in a text view */
     m = menu_in(bar, @"Edit");
@@ -2998,6 +3191,10 @@ static void build_menu(void)
         CMD | NSEventModifierFlagControl, nil);
 
     m = menu_in(bar, @"Window");
+    /* the keys Safari and Xcode use to go round their tabs */
+    add(m, @"Show Next Tab", @selector(nextTab:), @"}", CMD, g_adda);
+    add(m, @"Show Previous Tab", @selector(previousTab:), @"{", CMD, g_adda);
+    [m addItem:NSMenuItem.separatorItem];
     add(m, @"Minimize", @selector(performMiniaturize:), @"m", CMD, nil);
     add(m, @"Zoom", @selector(performZoom:), @"", 0, nil);
     NSApp.windowsMenu = m;
@@ -3070,12 +3267,12 @@ static void build_menu(void)
     }
     {
         int x = -1, t;
-        for (t = 0; t < 2; t++)
+        for (t = 0; t < tab_count(); t++)
             if (tab_x_shown(t) && NSPointInRect(p, g_tabX[t])) x = t;
         if (x != g_tabXHot) {
+            if (g_tabXHot >= 0) [self setNeedsDisplayInRect:g_tabRect[g_tabXHot]];
+            if (x >= 0)         [self setNeedsDisplayInRect:g_tabRect[x]];
             g_tabXHot = x;
-            [self setNeedsDisplayInRect:g_tabRect[0]];
-            if (g_cheatTab) [self setNeedsDisplayInRect:g_tabRect[1]];
         }
     }
 }
@@ -3096,26 +3293,16 @@ static void build_menu(void)
     int at;
 
     /* the x on a tab, which has to be tried before the tab itself */
-    for (at = 0; at < 2; at++) {
+    for (at = 0; at < tab_count(); at++) {
         if (!tab_x_shown(at) || !NSPointInRect(p, g_tabX[at])) continue;
-        if (at == 0) {                    /* saved, and out of the editor */
-            close_file();
-            g_tabXHot = -1;
-            layout();
-        } else {
-            close_cheats();
-        }
+        close_tab(at);                    /* a file is saved first */
         return;
     }
 
     /* the tab strip */
-    if (NSPointInRect(p, g_tabRect[0]) || NSPointInRect(p, g_tabRect[1])) {
-        g_tab = NSPointInRect(p, g_tabRect[1]) ? 1 : 0;
-        if (g_tab == 1) refresh_cheats();
-        layout();
-        [g_win makeFirstResponder:g_tab ? (g_cheatOpen ? (NSResponder *)g_cheatsView
-                                                       : (NSResponder *)g_cheatFind)
-                                        : (NSResponder *)g_code];
+    for (at = 0; at < tab_count(); at++) {
+        if (!NSPointInRect(p, g_tabRect[at])) continue;
+        switch_tab(at);
         return;
     }
 
@@ -4087,8 +4274,15 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
     if (item.action == @selector(runCode:))  return !g_running;
     if (item.action == @selector(runAllFiles:)) return !g_running && g_home != nil;
     if (item.action == @selector(stopCode:)) return g_running;
+    if (item.action == @selector(closeTab:)) return tab_x_shown(g_tab);
+    if (item.action == @selector(nextTab:) || item.action == @selector(previousTab:))
+        return tab_count() > 1;
     return YES;
 }
+
+- (void)closeTab:(id)sender    { (void)sender; if (tab_x_shown(g_tab)) close_tab(g_tab); }
+- (void)nextTab:(id)sender     { (void)sender; switch_tab((g_tab + 1) % tab_count()); }
+- (void)previousTab:(id)sender { (void)sender; switch_tab((g_tab + tab_count() - 1) % tab_count()); }
 
 /* The Explorer's right-click menu. Built as it opens, and left empty for a
  * click below the last file, so no menu shows at all. */
