@@ -880,3 +880,46 @@ char *tidy_raw(const char *text, const char *arrow, const char *branch)
     tidy_free_edits(ed, n);
     return done(&o);
 }
+
+/* ────────────────────────────────────── the problem finder's marks ── */
+
+/* Line `want` (1-based) of `text`, without its ending, into `buf`. */
+static int line_of(const char *text, int want, char *buf, int max)
+{
+    int at = 1, n = 0;
+    const char *p = text;
+
+    while (*p && at < want) if (*p++ == '\n') at++;
+    while (p[n] && p[n] != '\r' && p[n] != '\n' && n < max - 1) { buf[n] = p[n]; n++; }
+    buf[n] = '\0';
+    return n;
+}
+
+/* Tidying only ever rewrites the front of a line and leaves the tail alone,
+ * so line the two up by their common ending and shift the column by the
+ * difference. Anything inside the part that was rewritten is widened to cover
+ * all of it, which is honest: that whole piece is what the mistake is in. */
+void tidy_move_mark(const char *raw, const char *shown, int line, int *col, int *len)
+{
+    char a[512], b[512];
+    int la = line_of(raw, line, a, (int)sizeof a);
+    int lb = line_of(shown, line, b, (int)sizeof b);
+    int head = 0, tail = 0, c = *col;
+
+    if (la == lb && memcmp(a, b, (size_t)la) == 0) return;      /* not tidied */
+
+    while (head < la && head < lb && a[head] == b[head]) head++;
+    while (tail < la - head && tail < lb - head &&
+           a[la - 1 - tail] == b[lb - 1 - tail]) tail++;
+
+    if (c >= la - tail) {                          /* in the shared ending */
+        *col = c + (lb - la);
+    } else {                                       /* in the rewritten front */
+        *col = head;
+        *len = (lb - tail) - head;
+        if (*len < 1) *len = 1;
+    }
+    if (*col < 0) *col = 0;
+    if (*col + *len > lb) *len = lb - *col;
+    if (*len < 1) *len = 1;
+}

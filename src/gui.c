@@ -1215,6 +1215,16 @@ static char *read_whole(const char *path, long *size)
     return code;
 }
 
+/* Anything that writes to the console brings your code back up first: on the
+ * cheat sheet tab the output has nowhere to show. */
+static void show_code_tab(void)
+{
+    if (g_tab == 0) return;
+    g_tab = 0;
+    layout(hwndMain);
+    InvalidateRect(hwndMain, NULL, FALSE);
+}
+
 static void run_code(HWND hwnd)
 {
     char *code;
@@ -1224,6 +1234,7 @@ static void run_code(HWND hwnd)
 
     if (g_running) return;
     g_runAll = FALSE;
+    show_code_tab();
     save_current();                 /* a run is a good moment to keep your work */
 
     code = code_text(&len);
@@ -1326,6 +1337,7 @@ static void run_next(HWND hwnd)
 static void run_all_files(HWND hwnd)
 {
     if (g_running) return;
+    show_code_tab();
     if (!g_projectDir[0]) {
         MessageBoxA(hwnd, "Open a project first.\n"
                           "New Project makes one, and Import Folder can open one you already have.",
@@ -2347,46 +2359,12 @@ static void toggle_tidy(HWND hwnd)
 /* Runs adda --check over what is in the editor, keeps where each mistake is
  * for paint_check, and lists them in the console. */
 /* Copies line `want` (1-based) of `text` into buf; returns its length. */
-static int line_of(const char *text, int want, char *buf, int max)
-{
-    int at = 1, n = 0;
-    const char *p = text;
-
-    while (*p && at < want) if (*p++ == '\n') at++;
-    while (p[n] && p[n] != '\r' && p[n] != '\n' && n < max - 1) { buf[n] = p[n]; n++; }
-    buf[n] = '\0';
-    return n;
-}
-
 /* A mistake's column is in the raw code, but the editor may be showing the
- * tidy view, where `[name] = Rocco` reads `name ——> Rocco`. Tidying only ever
- * rewrites the front of a line and leaves the tail alone, so line up the two
- * by their common ending and shift the column by the difference. Anything
- * inside the part that was rewritten is widened to cover all of it, which is
- * honest: that whole piece is what the mistake is in. */
+ * tidy view, where `[name] = Rocco` reads `name ——> Rocco`. tidy.c moves it,
+ * so both GUIs do it the same way. */
 static void mark_to_shown(CheckMark *m, const char *raw, const char *shown)
 {
-    char a[512], b[512];
-    int la = line_of(raw, m->line, a, sizeof a);
-    int lb = line_of(shown, m->line, b, sizeof b);
-    int head = 0, tail = 0, col = m->col - 1;      /* col is 1-based */
-
-    if (la == lb && memcmp(a, b, (size_t)la) == 0) return;      /* not tidied */
-
-    while (head < la && head < lb && a[head] == b[head]) head++;
-    while (tail < la - head && tail < lb - head &&
-           a[la - 1 - tail] == b[lb - 1 - tail]) tail++;
-
-    if (col >= la - tail) {                        /* in the shared ending */
-        m->col = col + (lb - la) + 1;
-    } else {                                       /* in the rewritten front */
-        m->col = head + 1;
-        m->len = (lb - tail) - head;
-        if (m->len < 1) m->len = 1;
-    }
-    if (m->col < 1) m->col = 1;
-    if (m->col - 1 + m->len > lb) m->len = lb - (m->col - 1);
-    if (m->len < 1) m->len = 1;
+    tidy_move_mark(raw, shown, m->line, &m->col, &m->len);
 }
 
 static void check_code(void)
@@ -2403,6 +2381,7 @@ static void check_code(void)
     FILE *f;
 
     g_chkCount = 0;
+    show_code_tab();
 
     /* The check runs on the raw code, but the editor keeps showing whatever it
      * was showing - turning the tidy view off underneath someone who asked for
@@ -2516,6 +2495,15 @@ static COLORREF code_colour(ColourKind k)
  * corner with a rounded bezier, so a `details` block reads as one line coming
  * down and curving into each setting under it.
  */
+/* A branch starts with `|` or with the box-drawing corner, whose first two
+ * bytes are E2 94. A plain arrow written on a Mac also starts E2 - it is an
+ * em dash, E2 80 - so the second byte is what tells them apart. */
+static BOOL is_branch(const char *s)
+{
+    return s[0] == '|' ||
+           ((unsigned char)s[0] == 0xE2 && (unsigned char)s[1] == 0x94);
+}
+
 static void draw_smooth_arrow(HDC dst, RECT box, BOOL branch, BOOL more,
                               COLORREF ink, COLORREF bg)
 {
@@ -2644,7 +2632,7 @@ static void paint_colours(HWND h)
             if (a != -1 && b != -1 && (short)HIWORD(a) == (short)HIWORD(b) &&
                 (short)LOWORD(a) >= GUTTER_W && (short)LOWORD(b) > (short)LOWORD(a)) {
                 RECT box;
-                BOOL branch = (text[from] == '|' || (unsigned char)text[from] == 0xE2);
+                BOOL branch = is_branch(text + from);
                 box.left = (short)LOWORD(a);
                 box.right = (short)LOWORD(b);
                 box.top = (short)HIWORD(a);
@@ -2657,8 +2645,7 @@ static void paint_colours(HWND h)
                         if (q < len) {
                             q++;
                             while (q < len && (text[q] == 0x20 || text[q] == 0x09)) q++;
-                            more = (q < len && (text[q] == 0x7c ||
-                                                (unsigned char)text[q] == 0xE2));
+                            more = (q < len && is_branch(text + q));
                         }
                     }
                     draw_smooth_arrow(dc, box, branch, more,

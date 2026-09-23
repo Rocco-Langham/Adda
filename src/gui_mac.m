@@ -181,18 +181,18 @@ static NSTextView   *g_code;
 static ConsoleView  *g_console;
 static NSTextField  *g_find;
 static FileTable    *g_files;
-static Popup        *g_settings, *g_cheats;
+static Popup        *g_settings;
 static SettingsView *g_settingsView;
 static CheatsView   *g_cheatsView;
 static NSTextField  *g_cheatFind;
 static CheatTable   *g_cheatList;
 static Adda         *g_adda;
 
-static NSFont *g_fontMono, *g_fontCode, *g_fontCodeBold, *g_fontUI, *g_fontUIBold, *g_fontSmall;
+static NSFont *g_fontMono, *g_fontCode, *g_fontUI, *g_fontUIBold, *g_fontSmall;
 
 /* ── activity bar ────────────────────────────────────────────────── */
 enum { ICON_EXPLORER, ICON_SEARCH, ICON_PLAY, ICON_STOP, ICON_CHEAT, ICON_GEAR, ICON_PLUS,
-       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW, ICON_TIDY };
+       ICON_SAVE, ICON_IMPORT, ICON_CHECK, ICON_NEW, ICON_TIDY, ICON_CLOSE };
 /* Run and Stop sit under Search; Cheat sheet and Settings are pinned to the
  * bottom. Everything before AB_CHEAT stacks from the top. */
 enum { AB_EXPLORER = 0, AB_SEARCH, AB_NEW, AB_RUN, AB_STOP, AB_TIDY, AB_CHECK, AB_CHEAT, AB_GEAR, AB_COUNT };
@@ -218,6 +218,13 @@ static NSRect  g_splitRect;
 static NSRect  g_splitHit;            /* the whole gap between code and console */
 static NSRect  g_panelRect;
 static NSRect  g_findBox;             /* the frame drawn round the find field */
+
+/* 0: your code. 1: the cheat sheet. Both live in the editor area. */
+static int     g_tab;
+static NSRect  g_tabRect[2];
+static NSRect  g_tabX[2];             /* the x that shuts each one */
+static int     g_tabXHot = -1;        /* the x under the pointer, or -1 */
+static BOOL    g_cheatTab;            /* is the cheat sheet tab open at all */
 
 /* ── the running program ─────────────────────────────────────────── */
 static pid_t          g_pid;
@@ -264,11 +271,21 @@ static const Cheat *g_cheatOpen;     /* the entry whose own page is showing, or 
 static NSRect g_cheatBack;          /* the Back button on that page */
 static BOOL   g_cheatBackHot;
 static int g_cheatCount;
+static NSScrollView *g_cheatListScroll;
+
+/* Your code only shows an x once it is a file: with nothing open there is
+ * nothing to put away, and shutting it would throw away what was typed. */
+static BOOL tab_x_shown(int t)
+{
+    return t == 1 ? g_cheatTab : g_curPath != nil;
+}
 
 static void apply_theme(void);
 static void layout(void);
 static void open_settings(void);
 static void open_cheats(void);
+static void close_cheats(void);
+static void leave_cheats(void);
 static void refresh_cheats(void);
 static void open_cheat(NSInteger shownIndex);
 static void show_cheat(const Cheat *c);
@@ -359,6 +376,10 @@ static BOOL system_is_dark(void)
 /* the tidy view: on unless it was turned off */
 static BOOL g_tidy = YES;
 static BOOL g_tidying;                 /* our own change to the text, not typing */
+/* The caret's own line is shown raw so it can be typed in - but only once
+ * something is actually typed. Clicking on a tidied line, or arrowing onto
+ * it, leaves the arrows where they are. */
+static BOOL g_typing;
 #define TIDY_ARROW "\xe2\x80\x94\xe2\x80\x94>"   /* ——> */
 #define TIDY_BRANCH "\xe2\x94\x94\xe2\x94\x80>"  /* └─> before each line in a delay */
 static void tidy_update(void);
@@ -440,24 +461,52 @@ static NSColor *code_colour(ColourKind k)
     return col(g_t.dark ? DARK[k] : LIGHT[k]);
 }
 
-/* The tidy view's arrows in bold. A font cannot be laid on top the way a
- * colour can, so this sets it on the text's own attributes - which the file,
- * being only the characters, never sees. It happens whether or not the code
- * is coloured. */
-static void bold_arrows(void)
+/* An arrow in the tidy view is drawn, not typed: dashes and a `>` never join
+ * up into a line. The characters stay where they are and keep the space, but
+ * are shown in no colour at all, and CodeView paints a smooth arrow over the
+ * top of them. These are the runs waiting to be painted. */
+typedef struct {
+    NSUInteger from, len;   /* characters, as the NSString counts them */
+    BOOL branch;            /* comes down from the line above and turns in */
+    BOOL more;              /* the line below carries the trunk on down */
+} ArrowRun;
+
+#define ARROW_RUNS 512
+static ArrowRun g_arrowRuns[ARROW_RUNS];
+static int      g_arrowCount;
+
+static BOOL is_branch(const char *s)
+{
+    return s[0] == '|' ||
+           ((unsigned char)s[0] == 0xE2 && (unsigned char)s[1] == 0x94);
+}
+
+/* Finds the arrows, hides their characters, and notes where they were.
+ * The code's font is put back to the plain one at the same time: the tidy
+ * view's edits can otherwise leave an old attribute behind. */
+static void find_arrows(void)
 {
     NSTextStorage *ts = g_code.textStorage;
+    NSLayoutManager *lm = g_code.layoutManager;
     NSString *text = g_code.string;
     const char *utf8, *p;
     ColourSpan sp[512];
     NSUInteger at = 0;
     int n, i;
 
-    if (!ts || !text.length) return;
-    utf8 = text.UTF8String;
-    n = colour_spans(utf8, sp, 512);
+    g_arrowCount = 0;
+    if (!ts || !lm || !text.length) return;
     [ts beginEditing];
     [ts addAttribute:NSFontAttributeName value:g_fontCode range:NSMakeRange(0, text.length)];
+    [ts endEditing];
+
+    /* while the check marks are up they own the colours, so the arrows stay
+     * as plain characters rather than disappearing under them */
+    if (g_checkLines.count) return;
+
+    utf8 = text.UTF8String;
+    if (!utf8) return;
+    n = colour_spans(utf8, sp, 512);
     p = utf8;
     for (i = 0; i < n; i++) {
         const char *s0 = utf8 + sp[i].start, *s1 = s0 + sp[i].len;
@@ -467,10 +516,34 @@ static void bold_arrows(void)
         from = at;
         for (; p < s1; p++)
             if (((unsigned char)*p & 0xC0) != 0x80) at += ((unsigned char)*p >= 0xF0) ? 2 : 1;
-        if (sp[i].kind == COL_ARROW && at > from && at <= text.length)
-            [ts addAttribute:NSFontAttributeName value:g_fontCodeBold range:NSMakeRange(from, at - from)];
+        if (sp[i].kind != COL_ARROW || at <= from || at > text.length) continue;
+        if (g_arrowCount == ARROW_RUNS) break;
+
+        {
+            ArrowRun *r = &g_arrowRuns[g_arrowCount++];
+            unsigned char c0 = (unsigned char)utf8[sp[i].start];
+            size_t q = sp[i].start + sp[i].len;
+            r->from = from;
+            r->len = at - from;
+            /* A branch starts with `|` or with the box-drawing corner, whose
+             * first two bytes are E2 94. A plain arrow written on a Mac also
+             * starts E2 - it is an em dash, E2 80 - so the second byte is
+             * what tells them apart. */
+            r->branch = is_branch(utf8 + sp[i].start);
+            r->more = NO;
+            if (r->branch) {          /* does the line below carry the trunk on? */
+                while (utf8[q] && utf8[q] != '\n') q++;
+                if (utf8[q]) {
+                    q++;
+                    while (utf8[q] == ' ' || utf8[q] == '\t') q++;
+                    r->more = is_branch(utf8 + q);
+                }
+            }
+            [lm addTemporaryAttribute:NSForegroundColorAttributeName
+                                value:NSColor.clearColor
+                    forCharacterRange:NSMakeRange(r->from, r->len)];
+        }
     }
-    [ts endEditing];
 }
 
 /* Colours the code in the editor. The colours sit on top of the text rather
@@ -485,13 +558,17 @@ static void colour_code(void)
     NSUInteger at = 0;          /* the character index of p */
     int n, i, cap = 4096;
 
-    bold_arrows();
     /* while the check marks are up they own the text colours; clear_check
      * puts these back when they go */
-    if (!lm || !text.length || g_checkLines.count) return;
+    if (!lm || !text.length) { g_arrowCount = 0; return; }
+    if (g_checkLines.count) { find_arrows(); return; }
     [lm removeTemporaryAttribute:NSForegroundColorAttributeName
                forCharacterRange:NSMakeRange(0, text.length)];
-    if (!g_colours) return;              /* turned off in Settings: all one colour */
+    if (!g_colours) {                    /* turned off in Settings: all one colour */
+        find_arrows();                   /* the arrows are drawn either way */
+        g_code.needsDisplay = YES;
+        return;
+    }
 
     sp = malloc(sizeof *sp * (size_t)cap);
     if (!sp) return;
@@ -514,6 +591,8 @@ static void colour_code(void)
                     forCharacterRange:NSMakeRange(from, at - from)];
     }
     free(sp);
+    find_arrows();                       /* hides them, so they can be drawn */
+    g_code.needsDisplay = YES;
 }
 
 static void reload_quietly(NSTableView *tv)
@@ -541,7 +620,6 @@ static void apply_theme(void)
 
     style_window(g_win, look, g_t.bg);
     style_window(g_settings, look, g_t.surface);
-    style_window(g_cheats, look, g_t.surface);
 
     style_text(g_code);
     style_text(g_console);
@@ -573,10 +651,9 @@ static void apply_theme(void)
 static void build_fonts(void)
 {
     /* the console, a little bigger than the rest; the code bigger again, to
-     * read easily - and a bold of it for the tidy view's arrows */
+     * read easily */
     g_fontMono     = [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightRegular];
     g_fontCode     = [NSFont monospacedSystemFontOfSize:17 weight:NSFontWeightRegular];
-    g_fontCodeBold = [NSFont monospacedSystemFontOfSize:17 weight:NSFontWeightBold];
     g_fontUI     = [NSFont systemFontOfSize:13];
     g_fontUIBold = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
     g_fontSmall  = [NSFont systemFontOfSize:11];
@@ -773,6 +850,14 @@ static void draw_icon(NSRect box, int kind, unsigned fgc, unsigned bgc)
         break;
     }
 
+    case ICON_CLOSE: {                  /* the x that shuts a tab */
+        static const CGFloat a[] = { 30,30, 70,70 };
+        static const CGFloat c[] = { 70,30, 30,70 };
+        ink(shape(b, a, 2, NO), stroke * 1.2, fg, bg, NO);
+        ink(shape(b, c, 2, NO), stroke * 1.2, fg, bg, NO);
+        break;
+    }
+
     default: break;
     }
 }
@@ -804,7 +889,7 @@ static void round_frame(NSRect r, unsigned c, CGFloat radius)
     [p stroke];
 }
 
-enum { T_LEFT = 0, T_RIGHT = 1, T_VCENTER = 2 };
+enum { T_LEFT = 0, T_RIGHT = 1, T_VCENTER = 2, T_CENTER = 4 };
 
 static void text_at(NSRect r, NSString *s, NSFont *font, unsigned colour, int flags)
 {
@@ -812,7 +897,9 @@ static void text_at(NSRect r, NSString *s, NSFont *font, unsigned colour, int fl
     CGFloat lineH = ceil(font.ascender - font.descender + font.leading);
 
     para.lineBreakMode = NSLineBreakByTruncatingTail;
-    para.alignment = (flags & T_RIGHT) ? NSTextAlignmentRight : NSTextAlignmentLeft;
+    para.alignment = (flags & T_RIGHT)  ? NSTextAlignmentRight
+                   : (flags & T_CENTER) ? NSTextAlignmentCenter
+                                        : NSTextAlignmentLeft;
     if (flags & T_VCENTER)
         r = NSMakeRect(NSMinX(r), NSMinY(r) + (NSHeight(r) - lineH) / 2, NSWidth(r), lineH);
 
@@ -1191,12 +1278,22 @@ static BOOL ok_to_run(NSString *warnings)
     return [a runModal] == NSAlertFirstButtonReturn;
 }
 
+/* Anything that writes to the console brings your code back up first: on the
+ * cheat sheet tab the output has nowhere to show. */
+static void show_code_tab(void)
+{
+    if (g_tab == 0) return;
+    g_tab = 0;
+    layout();
+}
+
 static void run_code(void)
 {
     NSString *code;
 
     if (g_running) return;
     g_runQueue = nil;
+    show_code_tab();
     save_current();                 /* a run is a good moment to keep your work */
     code = raw_code();
     if (!ok_to_run(code_warnings(code))) return;
@@ -1261,6 +1358,7 @@ static void run_all_files(void)
     NSMutableArray<NSString *> *all = [NSMutableArray array];
 
     if (g_running) return;
+    show_code_tab();
     if (!g_home) { need_project(); return; }
     save_current();                 /* what you just typed is part of "all" */
     collect_programs(g_home, all);
@@ -1426,6 +1524,7 @@ static void show_current(void)
                 : file            ? [NSString stringWithFormat:@"%@ - Adda", file]
                 : project         ? [NSString stringWithFormat:@"%@ - Adda", project]
                                   : @"Adda";
+    g_main.needsDisplay = YES;        /* the tab is named after the file */
 }
 
 /* Puts the open file away: saved, and out of the editor. */
@@ -1471,7 +1570,8 @@ static void tidy_update(void)
     caretCol = caret - lineStart;
 
     utf8 = text.UTF8String;
-    n = tidy_edits(utf8, TIDY_ARROW, TIDY_BRANCH, g_code.window.firstResponder == g_code ? (long)caretLine : -1,
+    n = tidy_edits(utf8, TIDY_ARROW, TIDY_BRANCH,
+                   (g_typing && g_code.window.firstResponder == g_code) ? (long)caretLine : -1,
                    g_tidy, ed, 128);
     if (!n) return;
 
@@ -2041,7 +2141,7 @@ static void layout(void)
     NSRect rc = g_main.bounds;
     CGFloat W = NSWidth(rc), H = NSHeight(rc);
     CGFloat abW = 48, panelW = (g_view >= 0) ? 210 : 0, pad = 12;
-    CGFloat toolH = 12, splitH = 7, below = 20;   /* below: room for the hint */
+    CGFloat toolH = 40, splitH = 7, below = 20;   /* toolH: the tab strip */
     CGFloat x, y, w, h, top, codeH, consoleH;
     int i;
 
@@ -2061,6 +2161,22 @@ static void layout(void)
     x = abW + panelW;
     w = W - x;
     if (w < 200) w = 200;
+
+    /* the tab strip above the editor */
+    {
+        CGFloat tabH = 30, tw = 150;
+        int t;
+        g_tabRect[0] = NSMakeRect(x + pad, 4, tw, tabH);
+        g_tabRect[1] = NSMakeRect(NSMaxX(g_tabRect[0]) + 4, 4, tw, tabH);
+        if (!g_cheatTab) g_tabRect[1] = NSZeroRect;     /* shut, so not there */
+
+        for (t = 0; t < 2; t++) {                       /* the x on each tab */
+            CGFloat side = 16;
+            g_tabX[t] = NSMakeRect(NSMaxX(g_tabRect[t]) - 8 - side,
+                                   NSMinY(g_tabRect[t]) + (tabH - side) / 2, side, side);
+            if (NSIsEmptyRect(g_tabRect[t])) g_tabX[t] = NSZeroRect;
+        }
+    }
 
     /* editor area under the top padding */
     y = toolH;
@@ -2106,6 +2222,18 @@ static void layout(void)
 
     g_codeScroll.frame    = sized(x + pad, y, w - pad * 2, codeH - 6);
     g_consoleScroll.frame = sized(x + pad, y + codeH + splitH, w - pad * 2, consoleH - below);
+
+    /* the cheat sheet has the editor area to itself while its tab is showing */
+    g_codeScroll.hidden    = (g_tab == 1);
+    g_consoleScroll.hidden = (g_tab == 1);
+    g_cheatsView.hidden    = (g_tab != 1);
+    if (g_tab == 1 && g_cheatsView) {
+        NSRect b;
+        g_cheatsView.frame = sized(x + pad, y, w - pad * 2, h - below);
+        b = g_cheatsView.bounds;
+        g_cheatFind.frame = sized(14, 14, NSWidth(b) - 28, 24);
+        g_cheatListScroll.frame = sized(14, 50, NSWidth(b) - 28, NSHeight(b) - 50 - 32);
+    }
 
     [g_main removeAllToolTips];
     for (i = 0; i < AB_COUNT; i++)
@@ -2214,6 +2342,41 @@ static void paint_main(void)
 
         if (g_view == AB_SEARCH)          /* frame for the borderless find box */
             round_frame(NSInsetRect(g_findBox, -1, -1), g_t.border, RADIUS);
+    }
+
+    /* the tab strip, and the cheat sheet when it is the one showing */
+    {
+        NSString *names[2];
+        int t;
+
+        names[0] = g_curPath ? g_curPath.lastPathComponent : @"Your code";
+        names[1] = @"Cheat sheet";
+
+        for (t = 0; t < (g_cheatTab ? 2 : 1); t++) {
+            NSRect tab = g_tabRect[t], label = tab;
+            BOOL on = (g_tab == t);
+            unsigned face = on ? g_t.surface : g_t.bg;
+
+            round_fill(tab, face, RADIUS);
+            if (on) round_frame(tab, g_t.border, RADIUS);
+            if (tab_x_shown(t))
+                label.size.width = NSMinX(g_tabX[t]) - NSMinX(tab);
+            text_at(label, names[t], on ? g_fontUIBold : g_fontUI,
+                    on ? g_t.text : g_t.muted, T_CENTER | T_VCENTER);
+            if (tab_x_shown(t)) {
+                unsigned bg = face;
+                if (g_tabXHot == t) {          /* a pill under the pointer */
+                    bg = g_t.ghostHot;
+                    round_fill(g_tabX[t], bg, 4);
+                }
+                draw_icon(g_tabX[t], ICON_CLOSE, g_tabXHot == t ? g_t.text : g_t.muted, bg);
+            }
+        }
+    }
+
+    if (g_tab == 1) {
+        round_frame(NSInsetRect(g_cheatsView.frame, -1, -1), g_t.border, RADIUS_BIG);
+        return;                       /* the editor is not showing */
     }
 
     /* splitter: a faint line, like a grip */
@@ -2452,7 +2615,7 @@ static void show_cheat(const Cheat *c)
     g_cheatFind.hidden = (c != NULL);
     g_cheatList.enclosingScrollView.hidden = (c != NULL);
     g_cheatsView.needsDisplay = YES;
-    [g_cheats makeFirstResponder:c ? (NSResponder *)g_cheatsView : (NSResponder *)g_cheatFind];
+    [g_win makeFirstResponder:c ? (NSResponder *)g_cheatsView : (NSResponder *)g_cheatFind];
 }
 
 /* A click on a row: a topic (or the way back) turns the page, anything else
@@ -2505,48 +2668,73 @@ static NSScrollView *scroll_round(NSView *doc)
     return sv;
 }
 
+/* The cheat sheet is a tab beside your code, not a window of its own, so its
+ * views live in the main window and layout gives them the editor's area
+ * whenever that tab is the one showing. */
+static void build_cheats(void)
+{
+    NSRect frame = NSMakeRect(0, 0, 560, 500);
+
+    if (g_cheatsView) return;
+    g_cheatsView = [[CheatsView alloc] initWithFrame:frame];
+
+    g_cheatFind = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 14, NSWidth(frame) - 28, 24)];
+    g_cheatFind.font = g_fontUI;
+    g_cheatFind.bezelStyle = NSTextFieldRoundedBezel;
+    g_cheatFind.drawsBackground = YES;
+    g_cheatFind.placeholderString = @"What do you want to do?";
+    g_cheatFind.cell.scrollable = YES;
+    g_cheatFind.cell.wraps = NO;
+    g_cheatFind.delegate = g_adda;
+
+    g_cheatList = (CheatTable *)make_table([CheatTable class], 43);
+    g_cheatList.target = g_adda;
+    g_cheatList.action = @selector(openClickedCheat:);  /* one click opens a row */
+    /* the second click of a double-click goes here rather than to `action`
+     * again, where it would open whatever the first click had put under it */
+    g_cheatList.doubleAction = @selector(ignoreCheatDoubleClick:);
+
+    g_cheatListScroll = scroll_round(g_cheatList);
+    g_cheatListScroll.frame = NSMakeRect(14, 50, NSWidth(frame) - 28, NSHeight(frame) - 50 - 32);
+
+    [g_cheatsView addSubview:g_cheatFind];
+    [g_cheatsView addSubview:g_cheatListScroll];
+    g_cheatsView.hidden = YES;
+    [g_main addSubview:g_cheatsView];
+    apply_theme();
+}
+
 static void open_cheats(void)
 {
-    if (!g_cheats) {
-        NSRect frame = NSMakeRect(0, 0, 560, 500);
-        NSScrollView *sv;
-
-        g_cheatsView = [[CheatsView alloc] initWithFrame:frame];
-
-        g_cheatFind = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 14, NSWidth(frame) - 28, 24)];
-        g_cheatFind.font = g_fontUI;
-        g_cheatFind.bezelStyle = NSTextFieldRoundedBezel;
-        g_cheatFind.drawsBackground = YES;
-        g_cheatFind.placeholderString = @"What do you want to do?";
-        g_cheatFind.cell.scrollable = YES;
-        g_cheatFind.cell.wraps = NO;
-        g_cheatFind.delegate = g_adda;
-
-        g_cheatList = (CheatTable *)make_table([CheatTable class], 43);
-        g_cheatList.target = g_adda;
-        g_cheatList.action = @selector(openClickedCheat:);  /* one click opens a row */
-        /* the second click of a double-click goes here rather than to `action`
-         * again, where it would open whatever the first click had put under it */
-        g_cheatList.doubleAction = @selector(ignoreCheatDoubleClick:);
-
-        sv = scroll_round(g_cheatList);
-        sv.frame = NSMakeRect(14, 50, NSWidth(frame) - 28, NSHeight(frame) - 50 - 32);
-
-        [g_cheatsView addSubview:g_cheatFind];
-        [g_cheatsView addSubview:sv];
-        g_cheats = make_popup(@"Cheat sheet", g_cheatsView);
-        apply_theme();
-    }
-
-    if (!g_cheats.visible) {
+    build_cheats();
+    if (g_tab != 1) {
         g_cheatPage = 0;                 /* always opens on the list of topics */
         g_cheatFind.stringValue = @"";
         show_cheat(NULL);
         refresh_cheats();
-        centre_on(g_cheats);
     }
-    [g_cheats makeKeyAndOrderFront:nil];
-    [g_cheats makeFirstResponder:g_cheatFind];
+    g_cheatTab = YES;
+    g_tab = 1;
+    layout();
+    if (!g_cheatOpen) [g_win makeFirstResponder:g_cheatFind];
+}
+
+/* Puts the cheat sheet away. The button in the activity bar brings it back. */
+static void close_cheats(void)
+{
+    g_cheatTab = NO;
+    g_tab = 0;
+    g_tabXHot = -1;
+    layout();
+    [g_win makeFirstResponder:g_code];
+}
+
+/* Esc: back to your code, with the tab left where it was. */
+static void leave_cheats(void)
+{
+    g_tab = 0;
+    layout();
+    [g_win makeFirstResponder:g_code];
 }
 
 /* ═════════════════════════════════════════════════ main window ══ */
@@ -2669,6 +2857,7 @@ static void build_window(void)
                         (void)n;
                         ln.needsDisplay = YES;
                         g_dirty = YES;       /* belongs to the open file now */
+                        g_typing = YES;      /* now the caret's line shows raw */
                         clear_check();       /* the marks no longer line up */
                         dispatch_async(dispatch_get_main_queue(), ^{ tidy_update(); });
                     }];
@@ -2880,6 +3069,16 @@ static void build_menu(void)
         int bar = bar_hit(p);
         if (bar != g_barHot) { g_barHot = bar; animate(); }
     }
+    {
+        int x = -1, t;
+        for (t = 0; t < 2; t++)
+            if (tab_x_shown(t) && NSPointInRect(p, g_tabX[t])) x = t;
+        if (x != g_tabXHot) {
+            g_tabXHot = x;
+            [self setNeedsDisplayInRect:g_tabRect[0]];
+            if (g_cheatTab) [self setNeedsDisplayInRect:g_tabRect[1]];
+        }
+    }
 }
 
 - (void)mouseExited:(NSEvent *)e
@@ -2888,6 +3087,7 @@ static void build_menu(void)
     g_abHot = -1;
     g_addHot = NO;
     g_barHot = -1;
+    if (g_tabXHot >= 0) { g_tabXHot = -1; self.needsDisplay = YES; }
     animate();
 }
 
@@ -2895,6 +3095,30 @@ static void build_menu(void)
 {
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
     int at;
+
+    /* the x on a tab, which has to be tried before the tab itself */
+    for (at = 0; at < 2; at++) {
+        if (!tab_x_shown(at) || !NSPointInRect(p, g_tabX[at])) continue;
+        if (at == 0) {                    /* saved, and out of the editor */
+            close_file();
+            g_tabXHot = -1;
+            layout();
+        } else {
+            close_cheats();
+        }
+        return;
+    }
+
+    /* the tab strip */
+    if (NSPointInRect(p, g_tabRect[0]) || NSPointInRect(p, g_tabRect[1])) {
+        g_tab = NSPointInRect(p, g_tabRect[1]) ? 1 : 0;
+        if (g_tab == 1) refresh_cheats();
+        layout();
+        [g_win makeFirstResponder:g_tab ? (g_cheatOpen ? (NSResponder *)g_cheatsView
+                                                       : (NSResponder *)g_cheatFind)
+                                        : (NSResponder *)g_code];
+        return;
+    }
 
     at = bar_hit(p);
     if (at >= 0) {
@@ -2927,7 +3151,7 @@ static void build_menu(void)
 - (void)mouseDragged:(NSEvent *)e
 {
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
-    CGFloat toolH = 12, splitH = 7, minPane = 60, track, codeH;
+    CGFloat toolH = 40, splitH = 7, minPane = 60, track, codeH;
 
     if (!g_dragging) return;
     track = NSHeight(self.bounds) - toolH - splitH;
@@ -2998,6 +3222,9 @@ static void build_menu(void)
     }
     [super keyDown:e];
 }
+
+/* Esc on the list goes back to your code, leaving the tab where it is */
+- (void)cancelOperation:(id)sender { (void)sender; leave_cheats(); }
 
 @end
 
@@ -3211,16 +3438,21 @@ static CGFloat text_wrapped(NSRect r, NSString *s, NSFont *font, unsigned colour
         show_cheat(NULL);
 }
 
+/* Esc goes back to the list, and again out to your code */
+- (void)cancelOperation:(id)sender
+{
+    (void)sender;
+    if (g_cheatOpen) show_cheat(NULL); else leave_cheats();
+}
+
 @end
 
 @implementation Popup
 
-/* Esc closes whichever popup has focus - or, on a cheat sheet entry's own
- * page, goes back to the list first */
+/* Esc closes whichever popup has focus */
 - (void)cancelOperation:(id)sender
 {
     (void)sender;
-    if (self == g_cheats && g_cheatOpen) { show_cheat(NULL); return; }
     [self close];
 }
 
@@ -3332,17 +3564,19 @@ static void check_code(void)
     int found = 0;
 
     clear_check();
+    show_code_tab();
     if (!g_checkLines) g_checkLines = [NSMutableArray array];
 
-    /* the marks go on the raw code, so show it; tidy view waits until they go */
-    if (g_tidy) {
-        g_tidy = NO;
-        tidy_update();
-        g_tidy = YES;
-    }
+    /* The check runs on the raw code, but the editor keeps showing whatever
+     * it was showing - turning the tidy view off underneath someone who asked
+     * for a check is not what they asked for. Each mistake's column is moved
+     * onto the shown text afterwards, by tidy_move_mark. */
+    NSString *rawCode = raw_code();
+    const char *rawUTF8 = rawCode.UTF8String, *shownUTF8;
     code = g_code.string;
+    shownUTF8 = code.UTF8String;
 
-    if (![code writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:NULL])
+    if (![rawCode writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:NULL])
         return;
     task.executableURL = [NSURL fileURLWithPath:adda_path()];
     task.arguments = @[ @"--check", path ];
@@ -3369,6 +3603,8 @@ static void check_code(void)
         if (![sc scanInt:&line] || ![sc scanInt:&colB] || ![sc scanInt:&lenB]) continue;
         if (line < 1 || (NSUInteger)line > lines.count) continue;
         msg = sc.scanLocation + 1 < row.length ? [row substringFromIndex:sc.scanLocation + 1] : @"";
+        if (rawUTF8 && shownUTF8)
+            tidy_move_mark(rawUTF8, shownUTF8, line, &colB, &lenB);
 
         for (i = 0; i + 1 < (NSUInteger)line; i++) start += lines[i].length + 1;
         text = lines[(NSUInteger)line - 1];
@@ -3430,7 +3666,103 @@ static void check_code(void)
     }
 }
 
+/* One arrow, drawn rather than typed. A branch turns the corner with a
+ * rounded curve, so a `details` block reads as one line coming down and
+ * curving into each setting under it. The view is flipped, so y grows
+ * downwards and the top of the box is its smallest y. */
+static void draw_smooth_arrow(NSRect box, BOOL branch, BOOL more, NSColor *ink)
+{
+    CGFloat w = NSWidth(box), h = NSHeight(box);
+    CGFloat top = NSMinY(box), cy = top + h / 2;
+    CGFloat thick = h / 9, headW, headH, stopX;
+    NSBezierPath *line = [NSBezierPath bezierPath], *head = [NSBezierPath bezierPath];
+
+    if (w <= 0 || h <= 0) return;
+    if (thick < 1) thick = 1;
+    headW = thick * 3;
+    headH = thick * 5 / 2;
+    stopX = NSMaxX(box) - headW - 1;
+    if (stopX < NSMinX(box)) stopX = NSMinX(box);
+
+    line.lineWidth = thick;
+    line.lineCapStyle = NSLineCapStyleButt;
+    line.lineJoinStyle = NSLineJoinStyleRound;
+    [ink set];
+
+    if (branch) {
+        CGFloat x = NSMinX(box) + w / 6, r = h / 3;
+        [line moveToPoint:NSMakePoint(x, top)];
+        [line lineToPoint:NSMakePoint(x, cy - r)];
+        [line curveToPoint:NSMakePoint(x + r, cy)
+             controlPoint1:NSMakePoint(x, cy)
+             controlPoint2:NSMakePoint(x, cy)];
+        [line lineToPoint:NSMakePoint(stopX, cy)];
+        if (more) {                          /* carries on down to the next one */
+            [line moveToPoint:NSMakePoint(x, cy - r)];
+            [line lineToPoint:NSMakePoint(x, top + h)];
+        }
+    } else {
+        [line moveToPoint:NSMakePoint(NSMinX(box), cy)];
+        [line lineToPoint:NSMakePoint(stopX, cy)];
+    }
+    [line stroke];
+
+    [head moveToPoint:NSMakePoint(NSMaxX(box) - 1, cy)];
+    [head lineToPoint:NSMakePoint(NSMaxX(box) - 1 - headW, cy - headH)];
+    [head lineToPoint:NSMakePoint(NSMaxX(box) - 1 - headW, cy + headH)];
+    [head closePath];
+    [head fill];
+}
+
 @implementation CodeView
+
+/* Moving the caret is not typing, so the line it lands on keeps its arrows.
+ * Every key that moves it without changing anything - the arrows, Home, End,
+ * Page Up and Down - arrives as a `move...` command. */
+- (void)doCommandBySelector:(SEL)sel
+{
+    NSString *name = NSStringFromSelector(sel);
+    if ([name hasPrefix:@"move"] || [name hasPrefix:@"scroll"] ||
+        [name hasPrefix:@"page"] || [name hasPrefix:@"centerSelection"])
+        g_typing = NO;
+    [super doCommandBySelector:sel];
+}
+
+- (void)mouseDown:(NSEvent *)e { g_typing = NO; [super mouseDown:e]; }
+
+- (BOOL)resignFirstResponder { g_typing = NO; return [super resignFirstResponder]; }
+
+/* The text is drawn first, with the arrows' own characters in no colour at
+ * all, and the arrows go on over the space they left. */
+- (void)drawRect:(NSRect)dirty
+{
+    NSLayoutManager *lm = self.layoutManager;
+    NSPoint o = self.textContainerOrigin;
+    NSUInteger len = self.string.length;
+    NSColor *ink = code_colour(COL_ARROW);
+    int i;
+
+    [super drawRect:dirty];
+    if (!lm) return;
+
+    for (i = 0; i < g_arrowCount; i++) {
+        ArrowRun *r = &g_arrowRuns[i];
+        NSRange chars, glyphs;
+        NSRect box;
+
+        if (r->from + r->len > len) continue;       /* the text moved under us */
+        chars = NSMakeRange(r->from, r->len);
+        glyphs = [lm glyphRangeForCharacterRange:chars actualCharacterRange:NULL];
+        if (!glyphs.length) continue;
+        box = [lm boundingRectForGlyphRange:glyphs inTextContainer:self.textContainer];
+        box.origin.x += o.x;
+        box.origin.y += o.y;
+        if (!NSIntersectsRect(box, dirty)) continue;
+        if (g_fontCode && NSHeight(box) > 3 * g_fontCode.pointSize)
+            continue;                                /* wrapped over lines: leave it */
+        draw_smooth_arrow(box, r->branch, r->more, ink);
+    }
+}
 
 - (void)drawViewBackgroundInRect:(NSRect)r
 {
@@ -3829,7 +4161,7 @@ static NSAttributedString *tree_label(NSString *name, BOOL isDir)
         NSInteger row = g_cheatList.selectedRow;
 
         if (cmd == @selector(insertNewline:)) { open_cheat(row); return YES; }
-        if (cmd == @selector(cancelOperation:)) { [g_cheats close]; return YES; }
+        if (cmd == @selector(cancelOperation:)) { leave_cheats(); return YES; }
         /* the arrows walk the list without leaving the search box */
         if (cmd == @selector(moveDown:) || cmd == @selector(moveUp:)) {
             row += (cmd == @selector(moveDown:)) ? 1 : -1;

@@ -47,4 +47,11 @@ void tidy_free_edits(TidyEdit *edits, int n);
 /* The whole of `text` with every tidy block turned back to raw (malloc'd). */
 char *tidy_raw(const char *text, const char *arrow, const char *branch);
 
+/* Moves a problem finder's mark from the raw code onto what the editor is
+ * showing. The finder works on the raw code, but the editor may be showing
+ * the tidy view, where `[name] = Rocco` reads `name --> Rocco`. `line` is
+ * 1-based; `col` and `len` are bytes, `col` 0-based as --check reports it,
+ * and both are moved in place. */
+void tidy_move_mark(const char *raw, const char *shown, int line, int *col, int *len);
+
 #endif

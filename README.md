@@ -180,9 +180,11 @@ already printed is fixed; only the line you are typing can be edited.
 Drag the divider between the two boxes to resize them, or double-click it to
 even them up. **F11** goes full screen.
 
-At the bottom of the bar, the **book** opens a searchable cheat sheet — pick a
-topic, or type what you want to do, and click an entry to see what it does and
-an example to type out yourself. The **cog** opens Settings, where **Themes** offers Follow Windows,
+At the bottom of the bar, the **book** opens a searchable cheat sheet in a tab
+beside your code — pick a topic, or type what you want to do, and click an
+entry to see what it does and an example to type out yourself. **Esc** goes
+back to your code, and the **×** on the tab puts the sheet away. The **cog**
+opens Settings, where **Themes** offers Follow Windows,
 Light, Dark, Beige and **Abyss** (the VS Code theme, using its real colours).
 Your choice is remembered.
 
