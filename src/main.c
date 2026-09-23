@@ -8,6 +8,9 @@
  *   adda --check file        list syntax errors without running (for the GUI)
  *   adda --warnings file     list what may go wrong, without running (for the GUI)
  */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L   /* fileno, under -std=c99 */
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
