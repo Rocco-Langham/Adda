@@ -64,6 +64,25 @@ done
 
 [ "$accept" = "1" ] && exit 0
 
+# The tidy view is C, not Adda, so it gets a C test: raw -> tidy -> raw has to
+# give back exactly what was typed. Skipped when there is no compiler.
+CC="${CC:-gcc}"
+command -v "$CC" >/dev/null 2>&1 ||
+    for dir in /c/msys64/ucrt64/bin /c/msys64/mingw64/bin /c/mingw64/bin; do
+        [ -x "$dir/gcc.exe" ] && { PATH="$dir:$PATH"; export PATH; break; }
+    done
+if command -v "$CC" >/dev/null 2>&1; then
+    if "$CC" -std=c99 -I src -o adda-tidytest tests/tidy_roundtrip.c src/tidy.c 2>/dev/null; then
+        if ./adda-tidytest; then pass=$((pass + 1)); else fail=$((fail + 1)); fi
+        rm -f adda-tidytest adda-tidytest.exe
+    else
+        echo "FAIL tests/tidy_roundtrip.c did not build"
+        fail=$((fail + 1))
+    fi
+else
+    echo "(no compiler: skipped the tidy round-trip test)"
+fi
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

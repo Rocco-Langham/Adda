@@ -168,11 +168,38 @@ static char *print_line(const char *s, const char *e, const char *arrow, const c
     return done(&o);
 }
 
+/* These three start a statement of their own, so `[delay] = 5` would tidy to
+ * exactly the same text as `delay - 5`, and `[print] = x` to the same as
+ * `print x`. Nothing could tell them apart again, so a variable with one of
+ * these names is left as it was typed. */
+static bool reserved_always(const char *nm, const char *nme)
+{
+    return word_at(nm, nme, "print") || word_at(nm, nme, "delay") ||
+           word_at(nm, nme, "openApplication");
+}
+
+/* Inside a shape, app or delay block, `name ——> box1` is a setting, so these
+ * words cannot also be a variable there. Outside a block there is no setting
+ * to confuse them with, and [name] is the example the guide itself uses, so
+ * there they are ordinary names. Both directions have to agree: tidying
+ * `[name] = Rocco` and then refusing to turn it back loses the line. */
+static bool reserved_in_block(const char *nm, const char *nme)
+{
+    static const char *const not_names[] = {
+        "name", "height", "width", "function", "delay", "openApplication",
+        "print", "text", "insert", "title", "colour", "color", NULL
+    };
+    int k;
+    for (k = 0; not_names[k]; k++)
+        if (word_at(nm, nme, not_names[k])) return true;
+    return false;
+}
+
 /* [age] = ask Hello  <->  age ——> ask ——> Hello, after any indent (and a
  * delay's branch, when `branch` is given). Only a plain [name] = ... line;
  * an ask keeps its own arrow before the question. NULL: unchanged. */
 static char *assign_line(const char *s, const char *e, const char *arrow, const char *branch,
-                         bool to_tidy)
+                         bool to_tidy, bool inBlock)
 {
     const char *p = skip_sp(s, e), *nm, *nme, *r;
     Buf o = { NULL, 0, 0 };
@@ -185,21 +212,17 @@ static char *assign_line(const char *s, const char *e, const char *arrow, const 
         nm = p + 1;
         nme = name_end(nm, e);
         if (nme == nm || nme >= e || *nme != ']') return NULL;
+        if (reserved_always(nm, nme)) return NULL;
+        if (inBlock && reserved_in_block(nm, nme)) return NULL;
         r = skip_sp(nme + 1, e);
         if (r >= e || *r != '=') return NULL;
         r = skip_sp(r + 1, e);
         if (r == e || starts(r, e, arrow)) return NULL;
     } else {                                         /* name ——> value */
-        static const char *const not_names[] = {     /* other lines with an arrow */
-            "name", "height", "width", "function", "delay", "openApplication",
-            "print", "text", "insert", "title", "colour", "color", NULL
-        };
-        int k;
         nm = p;
         nme = name_end(nm, e);
         if (nme == nm) return NULL;
-        for (k = 0; not_names[k]; k++)
-            if (word_at(nm, nme, not_names[k])) return NULL;
+        if (inBlock && reserved_in_block(nm, nme)) return NULL;
         r = skip_sp(nme, e);
         if (!starts(r, e, arrow)) return NULL;
         r = skip_sp(r + strlen(arrow), e);
@@ -238,11 +261,11 @@ static char *assign_line(const char *s, const char *e, const char *arrow, const 
 /* `line` (malloc'd, or NULL for the line s..e as it is) with its print done
  * as well; NULL when nothing changes at all */
 static char *and_print(char *line, const char *s, const char *e, const char *arrow,
-                       const char *branch, bool to_tidy)
+                       const char *branch, bool to_tidy, bool inBlock)
 {
     const char *from = line ? line : s, *to = line ? line + strlen(line) : e;
     char *c = print_line(from, to, arrow, branch, to_tidy);
-    if (!c) c = assign_line(from, to, arrow, branch, to_tidy);
+    if (!c) c = assign_line(from, to, arrow, branch, to_tidy, inBlock);
     if (!c) return line;
     free(line);
     return c;
@@ -380,7 +403,7 @@ static char *convert(const char *s, const char *e, const char *arrow, bool to_ti
 
     /* [age] = ask Hello   <->   age ——> ask ——> Hello */
     {
-        char *c = assign_line(s, e, arrow, NULL, to_tidy);
+        char *c = assign_line(s, e, arrow, NULL, to_tidy, true);   /* inside a block */
         if (c) { free(o.b); return c; }
     }
 
@@ -662,7 +685,7 @@ static char *convert_delay(Line *ls, int i, int j, bool hasEnd, const char *arro
             c = convert_delay_inner(ls[k].s, ls[k].e, ls[i].s, indent, branch, tidyThis,
                                     hasEnd && k == j);
         if (k != i && !(hasEnd && k == j)) {
-            c = and_print(c, ls[k].s, ls[k].e, arrow, branch, tidyThis);
+            c = and_print(c, ls[k].s, ls[k].e, arrow, branch, tidyThis, true);
             {                                               /* colour ——> yellow */
                 const char *from = c ? c : ls[k].s, *to = c ? c + strlen(c) : ls[k].e;
                 char *v = setting_line(from, to, arrow, branch, tidyThis);
@@ -772,8 +795,8 @@ int tidy_edits(const char *text, const char *arrow, const char *branch, long car
          * the caret's own line is left as it is being typed */
         {
             char *c = convert_stray(ls[i].s, ls[i].e, arrow, branch);
-            if (!on) c = and_print(c, ls[i].s, ls[i].e, arrow, NULL, false);
-            else if (i != caretLine) c = and_print(c, ls[i].s, ls[i].e, arrow, NULL, true);
+            if (!on) c = and_print(c, ls[i].s, ls[i].e, arrow, NULL, false, false);
+            else if (i != caretLine) c = and_print(c, ls[i].s, ls[i].e, arrow, NULL, true, false);
             add_edit(out, &count, text, ls[i].s, (size_t)(ls[i].e - ls[i].s), c);
         }
         i++;

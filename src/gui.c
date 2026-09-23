@@ -246,6 +246,7 @@ static void open_cheats(HWND owner);
 static void refresh_cheats(void);
 static void save_current(void);
 static void inq_clear(void);
+static char *code_text(int *outLen);
 
 /* ════════════════════════════════════════════════════════ theme ══ */
 
