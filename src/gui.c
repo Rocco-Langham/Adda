@@ -55,7 +55,6 @@
 
 /* settings / cheat popups */
 #define ID_CHEATFIND 1101
-#define ID_CHEATLIST 1102
 
 /* ── themes ──────────────────────────────────────────────────────── */
 typedef struct {
@@ -139,8 +138,12 @@ static Theme g_t;
 static HWND  hwndMain;
 static HWND  hwndCode, hwndConsole;
 static HWND  hwndFind, hwndFiles;
-static HWND  hwndSettings, hwndCheats;
-static HWND  hwndCheatFind, hwndCheatList;
+static HWND  hwndSettings;
+static HWND  hwndCheatFind;
+
+/* 0: your code. 1: the cheat sheet. Both live in the editor area. */
+static int   g_tab;
+static RECT  g_tabRect[2];
 
 static HBRUSH hBrushBg, hBrushSurface, hBrushAb;
 static HFONT  hFontMono, hFontCode, hFontCodeBold, hFontUI, hFontUIBold, hFontSmall;
@@ -242,9 +245,14 @@ static int g_cheatCount;
 static void apply_theme(HWND hwnd);
 static void layout(HWND hwnd);
 static void open_settings(HWND owner);
-static void open_cheats(HWND owner);
 static void refresh_cheats(void);
 static void save_current(void);
+static void cheat_clamp_scroll(void);
+static void paint_cheats(HDC hdc);
+static int  cheat_row_at(POINT p);
+static RECT g_cheatArea;
+static int  g_cheatScroll;
+static int  g_cheatHot = -1;      /* the cheat-sheet row under the pointer */
 static void inq_clear(void);
 static char *code_text(int *outLen);
 
@@ -391,22 +399,17 @@ static void apply_theme(HWND hwnd)
 
     apply_titlebar(hwnd);
     apply_titlebar(hwndSettings);
-    apply_titlebar(hwndCheats);
 
     theme_edit(hwndCode);
     theme_edit(hwndConsole);
     theme_edit(hwndFind);
     theme_edit(hwndFiles);
     theme_edit(hwndCheatFind);
-    theme_edit(hwndCheatList);
 
     RedrawWindow(hwnd, NULL, NULL,
                  RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_ERASE);
     if (hwndSettings)
         RedrawWindow(hwndSettings, NULL, NULL,
-                     RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_ERASE);
-    if (hwndCheats)
-        RedrawWindow(hwndCheats, NULL, NULL,
                      RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_ERASE);
 }
 
@@ -1995,7 +1998,7 @@ static void layout(HWND hwnd)
     abW    = S(48);
     panelW = (g_view >= 0) ? S(210) : 0;
     pad    = S(12);
-    toolH  = S(12);   /* just padding now Run and Stop live in the bar */
+    toolH  = S(40);   /* the tab strip */
     splitH = S(7);
 
     /* activity bar slots */
@@ -2052,6 +2055,24 @@ static void layout(HWND hwnd)
     g_splitRect.top    = y + codeH;
     g_splitRect.bottom = y + codeH + splitH;
 
+    /* the tab strip, and the cheat sheet's area underneath it */
+    {
+        int tabH = S(30), tw = S(150);
+        g_tabRect[0].left = x + pad;
+        g_tabRect[0].right = g_tabRect[0].left + tw;
+        g_tabRect[0].top = S(4);
+        g_tabRect[0].bottom = S(4) + tabH;
+        g_tabRect[1] = g_tabRect[0];
+        g_tabRect[1].left = g_tabRect[0].right + S(4);
+        g_tabRect[1].right = g_tabRect[1].left + tw;
+
+        g_cheatArea.left = x + pad;
+        g_cheatArea.right = rc.right - pad;
+        g_cheatArea.top = g_tabRect[0].bottom + S(6);
+        g_cheatArea.bottom = rc.bottom - pad;
+        cheat_clamp_scroll();
+    }
+
     dwp = BeginDeferWindowPos(6);
 
     if (g_view == AB_EXPLORER) {
@@ -2078,10 +2099,23 @@ static void layout(HWND hwnd)
         ShowWindow(hwndFind, SW_HIDE);
     }
 
-    dwp = move_child(dwp, hwndCode, x + pad, y,
-                     w - pad * 2, codeH - S(6), 0);
-    dwp = move_child(dwp, hwndConsole, x + pad, y + codeH + splitH,
-                     w - pad * 2, consoleH - S(10), 0);
+    if (g_tab == 1) {                    /* the cheat sheet has the area */
+        dwp = move_child(dwp, hwndCode, x + pad, y,
+                         w - pad * 2, codeH - S(6), SWP_HIDEWINDOW);
+        dwp = move_child(dwp, hwndConsole, x + pad, y + codeH + splitH,
+                         w - pad * 2, consoleH - S(10), SWP_HIDEWINDOW);
+        if (hwndCheatFind)
+            dwp = move_child(dwp, hwndCheatFind,
+                             g_cheatArea.left + S(10), g_cheatArea.top + S(8),
+                             g_cheatArea.right - g_cheatArea.left - S(20), S(28),
+                             g_cheatOpen ? SWP_HIDEWINDOW : SWP_SHOWWINDOW);
+    } else {
+        dwp = move_child(dwp, hwndCode, x + pad, y,
+                         w - pad * 2, codeH - S(6), SWP_SHOWWINDOW);
+        dwp = move_child(dwp, hwndConsole, x + pad, y + codeH + splitH,
+                         w - pad * 2, consoleH - S(10), SWP_SHOWWINDOW);
+        if (hwndCheatFind) ShowWindow(hwndCheatFind, SW_HIDE);
+    }
 
     if (dwp) EndDeferWindowPos(dwp);
 
@@ -2266,7 +2300,7 @@ static void toggle_tidy(HWND hwnd)
 {
     g_tidy = !g_tidy;
     save_tidy();
-    if (g_tidy && g_chkCount) {        /* the marks were holding it back */
+    if (g_chkCount) {        /* either way the text moves, so the marks would not line up */
         g_chkCount = 0;
         InvalidateRect(hwndCode, NULL, FALSE);
     }
@@ -2276,6 +2310,49 @@ static void toggle_tidy(HWND hwnd)
 
 /* Runs adda --check over what is in the editor, keeps where each mistake is
  * for paint_check, and lists them in the console. */
+/* Copies line `want` (1-based) of `text` into buf; returns its length. */
+static int line_of(const char *text, int want, char *buf, int max)
+{
+    int at = 1, n = 0;
+    const char *p = text;
+
+    while (*p && at < want) if (*p++ == '\n') at++;
+    while (p[n] && p[n] != '\r' && p[n] != '\n' && n < max - 1) { buf[n] = p[n]; n++; }
+    buf[n] = '\0';
+    return n;
+}
+
+/* A mistake's column is in the raw code, but the editor may be showing the
+ * tidy view, where `[name] = Rocco` reads `name ——> Rocco`. Tidying only ever
+ * rewrites the front of a line and leaves the tail alone, so line up the two
+ * by their common ending and shift the column by the difference. Anything
+ * inside the part that was rewritten is widened to cover all of it, which is
+ * honest: that whole piece is what the mistake is in. */
+static void mark_to_shown(CheckMark *m, const char *raw, const char *shown)
+{
+    char a[512], b[512];
+    int la = line_of(raw, m->line, a, sizeof a);
+    int lb = line_of(shown, m->line, b, sizeof b);
+    int head = 0, tail = 0, col = m->col - 1;      /* col is 1-based */
+
+    if (la == lb && memcmp(a, b, (size_t)la) == 0) return;      /* not tidied */
+
+    while (head < la && head < lb && a[head] == b[head]) head++;
+    while (tail < la - head && tail < lb - head &&
+           a[la - 1 - tail] == b[lb - 1 - tail]) tail++;
+
+    if (col >= la - tail) {                        /* in the shared ending */
+        m->col = col + (lb - la) + 1;
+    } else {                                       /* in the rewritten front */
+        m->col = head + 1;
+        m->len = (lb - tail) - head;
+        if (m->len < 1) m->len = 1;
+    }
+    if (m->col < 1) m->col = 1;
+    if (m->col - 1 + m->len > lb) m->len = lb - (m->col - 1);
+    if (m->len < 1) m->len = 1;
+}
+
 static void check_code(void)
 {
     char tmp_dir[MAX_PATH], path[MAX_PATH * 2], exe[MAX_PATH], cmd[MAX_PATH * 4];
@@ -2286,29 +2363,29 @@ static void check_code(void)
     HANDLE rd = NULL, wr = NULL;
     DWORD got, total = 0;
     int len;
-    char *code;
+    char *code, *rawText = NULL, *shownText = NULL;
     FILE *f;
 
     g_chkCount = 0;
 
-    /* the marks go on the raw code, so show it; tidy view waits until they go */
-    if (g_tidy) {
-        g_tidy = FALSE;
-        tidy_update();
-        g_tidy = TRUE;
-    }
-
-    len = GetWindowTextLengthA(hwndCode);
-    code = malloc((size_t)len + 1);
+    /* The check runs on the raw code, but the editor keeps showing whatever it
+     * was showing - turning the tidy view off underneath someone who asked for
+     * a check is not what they asked for. Columns are moved onto the shown
+     * text afterwards, in mark_to_shown. */
+    code = code_text(&len);
     if (!code) return;
-    GetWindowTextA(hwndCode, code, len + 1);
     GetTempPathA(MAX_PATH, tmp_dir);
     snprintf(path, sizeof path, "%s_adda_check.adda", tmp_dir);
-    f = fopen(path, "wb");                /* as-is, so columns match the editor */
+    f = fopen(path, "wb");
     if (!f) { free(code); return; }
     fwrite(code, 1, (size_t)len, f);
     fclose(f);
-    free(code);
+    rawText = code;                   /* kept to move the columns onto the view */
+    {
+        int n = GetWindowTextLengthA(hwndCode);
+        shownText = malloc((size_t)n + 1);
+        if (shownText) GetWindowTextA(hwndCode, shownText, n + 1);
+    }
 
     get_adda_path(exe, MAX_PATH);
     snprintf(cmd, sizeof cmd, "\"%s\" --check \"%s\"", exe, path);
@@ -2348,6 +2425,7 @@ static void check_code(void)
         char msg[320];
         if (sscanf(line, "%d %d %d %n", &m.line, &m.col, &m.len, &used) < 3 || used == 0) continue;
         snprintf(m.msg, sizeof m.msg, "%s", line + used);
+        if (rawText && shownText) mark_to_shown(&m, rawText, shownText);
         g_chk[g_chkCount++] = m;
         if (!g_running) {
             snprintf(msg, sizeof msg, "  line %d: %s\r\n", m.line, line + used);
@@ -2361,6 +2439,8 @@ static void check_code(void)
                       g_chkCount, g_chkCount == 1 ? "" : "s");
         console_append(head);
     }
+    free(rawText);
+    free(shownText);
     InvalidateRect(hwndCode, NULL, FALSE);
 }
 
@@ -2779,6 +2859,40 @@ static void paint_main(HWND hwnd, HDC hdc)
         fill_rect(hdc, line, g_t.border);
     }
 
+    /* the tab strip, and the cheat sheet when it is the one showing */
+    {
+        const char *names[2];
+        char fileTab[sizeof g_curPath + 8];
+        int t;
+
+        if (g_curPath[0]) {
+            const char *leaf = strrchr(g_curPath, '\\');
+            snprintf(fileTab, sizeof fileTab, "%s", leaf ? leaf + 1 : g_curPath);
+        } else {
+            snprintf(fileTab, sizeof fileTab, "Your code");
+        }
+        names[0] = fileTab;
+        names[1] = "Cheat sheet";
+
+        for (t = 0; t < 2; t++) {
+            RECT tab = g_tabRect[t];
+            BOOL on = (g_tab == t);
+            round_fill(hdc, tab, on ? g_t.surface : g_t.bg, RADIUS);
+            if (on) round_frame(hdc, tab, g_t.border, RADIUS);
+            text_at(hdc, tab, names[t], on ? hFontUIBold : hFontUI,
+                    on ? g_t.text : g_t.muted,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        }
+    }
+
+    if (g_tab == 1) {
+        RECT frame = g_cheatArea;
+        paint_cheats(hdc);
+        InflateRect(&frame, 1, 1);
+        round_frame(hdc, frame, g_t.border, RADIUS_BIG);
+        return;                       /* the editor is not showing */
+    }
+
     /* panel outlines */
     {
         RECT cr;
@@ -3184,12 +3298,9 @@ static void refresh_cheats(void)
         }
     }
 
-    if (!hwndCheatList) return;
-    SendMessageA(hwndCheatList, LB_RESETCONTENT, 0, 0);
-    for (i = 0; i < g_cheatCount; i++)
-        SendMessageA(hwndCheatList, LB_ADDSTRING, 0,
-                     (LPARAM)g_cheatShown[i]->title);
-    if (g_cheatCount) SendMessageA(hwndCheatList, LB_SETCURSEL, 0, 0);
+    g_cheatScroll = 0;                  /* a new list starts at the top */
+    g_cheatHot = -1;
+    if (hwndMain) InvalidateRect(hwndMain, NULL, FALSE);
 }
 
 /* Shows an entry's own page - what it does, and an example to read and type
@@ -3199,11 +3310,10 @@ static void show_cheat(const Cheat *c)
 {
     g_cheatOpen = c;
     g_cheatBackHot = FALSE;
-    if (!hwndCheats) return;
-    ShowWindow(hwndCheatFind, c ? SW_HIDE : SW_SHOW);
-    ShowWindow(hwndCheatList, c ? SW_HIDE : SW_SHOW);
-    InvalidateRect(hwndCheats, NULL, TRUE);
-    SetFocus(c ? hwndCheats : hwndCheatFind);
+    g_cheatScroll = 0;
+    g_cheatHot = -1;
+    if (hwndCheatFind) ShowWindow(hwndCheatFind, c ? SW_HIDE : SW_SHOW);
+    if (hwndMain) { layout(hwndMain); InvalidateRect(hwndMain, NULL, FALSE); }
 }
 
 /* A click on a row: a topic (or the way back) turns the page, anything else
@@ -3248,18 +3358,19 @@ static void paint_cheat_page(HDC hdc, RECT rc)
     HGDIOBJ old;
     const char *line;
     int y, lineH, lines = 1;
+    int ox = rc.left, oy = rc.top;        /* the sheet no longer owns the window */
 
-    g_cheatBack.left = S(14);
-    g_cheatBack.top = S(14);
+    g_cheatBack.left = ox + S(14);
+    g_cheatBack.top = oy + S(14);
     g_cheatBack.right = g_cheatBack.left + S(74);
     g_cheatBack.bottom = g_cheatBack.top + S(26);
     round_fill(hdc, g_cheatBack, g_cheatBackHot ? g_t.sel : g_t.ghostHot, S(13));
     text_at(hdc, g_cheatBack, "<- Back", hFontUI, g_t.text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-    r.left = S(20);
+    r.left = ox + S(20);
     r.right = rc.right - S(20);
-    y = S(58);
+    y = oy + S(58);
 
     r.top = y; r.bottom = rc.bottom;
     y += text_wrapped(hdc, r, c->title, hFontTitle, g_t.text) + S(16);
@@ -3303,207 +3414,120 @@ static void paint_cheat_page(HDC hdc, RECT rc)
     }
 }
 
-static void draw_cheat_item(DRAWITEMSTRUCT *di)
+
+/* ═════════════════════════════════════ the cheat sheet, as a tab ══ */
+
+/* The cheat sheet used to be a window of its own with a LISTBOX in it. It is
+ * now painted straight into the editor area as a second tab, which is what
+ * makes it behave: the rows are hit-tested here, so a click always lands, and
+ * the wheel scrolls because this code owns the scrolling rather than leaving
+ * it to whichever control happened to have the focus. */
+
+#define CHEAT_ROW_H  S(44)
+
+static int  g_cheatHeight;          /* how tall the whole list is */
+
+static void cheat_clamp_scroll(void)
 {
-    RECT r = di->rcItem;
-    RECT line;
-    const Cheat *c;
-    BOOL selected = (di->itemState & ODS_SELECTED) != 0;
+    int room = g_cheatArea.bottom - g_cheatArea.top;
+    int most = g_cheatHeight - room;
 
-    if ((int)di->itemID < 0 || (int)di->itemID >= g_cheatCount) {
-        fill_rect(di->hDC, r, g_t.surface);
-        return;
-    }
-    c = g_cheatShown[di->itemID];
-
-    fill_rect(di->hDC, r, g_t.surface);
-    if (selected) {
-        RECT pill = r;
-        InflateRect(&pill, -S(6), -S(2));
-        round_fill(di->hDC, pill, g_t.sel, RADIUS);
-    }
-
-    line = r;
-    line.left += S(12);
-    line.right -= S(12);
-    line.top += S(6);
-    line.bottom = line.top + S(18);
-    text_at(di->hDC, line, c->title, hFontUIBold, g_t.text,
-            DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-
-    line.top = line.bottom;
-    line.bottom = line.top + S(17);
-    text_at(di->hDC, line, c->about, hFontSmall, g_t.muted,
-            DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (most < 0) most = 0;
+    if (g_cheatScroll > most) g_cheatScroll = most;
+    if (g_cheatScroll < 0) g_cheatScroll = 0;
 }
 
-static void cheats_paint(HWND hwnd, HDC hdc)
+/* Where row `i` sits on screen, given the scroll. */
+static RECT cheat_row_rect(int i)
 {
-    RECT rc, hint;
+    RECT r;
+    r.left = g_cheatArea.left + S(10);
+    r.right = g_cheatArea.right - S(10);
+    r.top = g_cheatArea.top + S(46) + i * CHEAT_ROW_H - g_cheatScroll;   /* under the search box */
+    r.bottom = r.top + CHEAT_ROW_H;
+    return r;
+}
 
-    GetClientRect(hwnd, &rc);
-    fill_rect(hdc, rc, g_t.surface);
-    if (g_cheatOpen) paint_cheat_page(hdc, rc);
+static int cheat_row_at(POINT p)
+{
+    int i;
+    if (g_cheatOpen || !contains(g_cheatArea, p)) return -1;
+    for (i = 0; i < g_cheatCount; i++)
+        if (contains(cheat_row_rect(i), p)) return i;
+    return -1;
+}
 
-    hint = rc;
+static void paint_cheat_rows(HDC hdc)
+{
+    int i;
+
+    g_cheatHeight = S(52) + g_cheatCount * CHEAT_ROW_H;
+    cheat_clamp_scroll();
+
+    for (i = 0; i < g_cheatCount; i++) {
+        const Cheat *c = g_cheatShown[i];
+        RECT r = cheat_row_rect(i), line;
+
+        if (r.bottom < g_cheatArea.top || r.top > g_cheatArea.bottom) continue;
+
+        if (i == g_cheatHot) {
+            RECT pill = r;
+            InflateRect(&pill, -S(4), -S(2));
+            round_fill(hdc, pill, g_t.ghostHot, RADIUS);
+        }
+
+        line = r;
+        line.left += S(12);
+        line.right -= S(12);
+        line.top += S(6);
+        line.bottom = line.top + S(18);
+        text_at(hdc, line, c->title, hFontUIBold, g_t.text,
+                DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+        line.top = line.bottom;
+        line.bottom = line.top + S(17);
+        text_at(hdc, line, c->about, hFontSmall, g_t.muted,
+                DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+
+    /* a slim bar down the right, only while there is more than fits */
+    if (g_cheatHeight > g_cheatArea.bottom - g_cheatArea.top) {
+        int room = g_cheatArea.bottom - g_cheatArea.top;
+        RECT bar;
+        int h = room * room / g_cheatHeight;
+        if (h < S(24)) h = S(24);
+        bar.right = g_cheatArea.right - S(3);
+        bar.left = bar.right - S(4);
+        bar.top = g_cheatArea.top +
+                  (room - h) * g_cheatScroll / (g_cheatHeight - room);
+        bar.bottom = bar.top + h;
+        round_fill(hdc, bar, g_t.border, S(2));
+    }
+}
+
+static void paint_cheats(HDC hdc)
+{
+    RECT hint = g_cheatArea;
+
+    fill_rect(hdc, g_cheatArea, g_t.surface);
+
+    if (g_cheatOpen) {
+        RECT page = g_cheatArea;
+        page.top -= g_cheatScroll;      /* an entry's page scrolls too */
+        paint_cheat_page(hdc, page);
+    } else {
+        paint_cheat_rows(hdc);
+    }
+
     hint.left += S(14);
     hint.right -= S(14);
-    hint.bottom -= S(8);
+    hint.bottom -= S(6);
     hint.top = hint.bottom - S(18);
+    fill_rect(hdc, hint, g_t.surface);
     text_at(hdc, hint,
             g_cheatOpen ? "Type it into your own program to try it out"
-                        : "Click a topic, then click anything in it to see how it is done",
-            hFontSmall, g_t.muted, DT_LEFT | DT_SINGLELINE);
-}
-
-static LRESULT CALLBACK CheatsProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
-{
-    switch (msg) {
-
-    case WM_ERASEBKGND:
-        return 1;
-
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        cheats_paint(hwnd, hdc);
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-
-    case WM_CTLCOLOREDIT: {
-        HDC hdc = (HDC)w;
-        SetTextColor(hdc, g_t.text);
-        SetBkColor(hdc, g_t.surface);
-        return (LRESULT)hBrushSurface;
-    }
-
-    case WM_DRAWITEM:
-        draw_cheat_item((DRAWITEMSTRUCT *)l);
-        return TRUE;
-
-    case WM_MEASUREITEM: {
-        MEASUREITEMSTRUCT *mi = (MEASUREITEMSTRUCT *)l;
-        mi->itemHeight = (UINT)S(43);
-        return TRUE;
-    }
-
-    case WM_COMMAND:
-        if (LOWORD(w) == ID_CHEATFIND && HIWORD(w) == EN_CHANGE) {
-            refresh_cheats();
-            return 0;
-        }
-        /* one click opens a row. The second click of a double-click is not
-         * meant for whatever row the first one put under the pointer, so a
-         * click that comes that soon after a page has turned is let go. */
-        if (LOWORD(w) == ID_CHEATLIST && HIWORD(w) == LBN_SELCHANGE &&
-            GetKeyState(VK_LBUTTON) < 0) {
-            if (GetTickCount() - g_cheatTick < GetDoubleClickTime()) {
-                SendMessageA(hwndCheatList, LB_SETCURSEL, 0, 0);
-                return 0;
-            }
-            open_cheat((int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0));
-            return 0;
-        }
-        break;
-
-    case WM_MOUSEMOVE: {
-        POINT p;
-        BOOL hot;
-        TRACKMOUSEEVENT tme;
-
-        p.x = GET_X_LPARAM(l); p.y = GET_Y_LPARAM(l);
-        hot = g_cheatOpen && contains(g_cheatBack, p);
-        if (hot != g_cheatBackHot) {
-            g_cheatBackHot = hot;
-            InvalidateRect(hwnd, &g_cheatBack, FALSE);
-        }
-        tme.cbSize = sizeof(tme);
-        tme.dwFlags = TME_LEAVE;
-        tme.hwndTrack = hwnd;
-        tme.dwHoverTime = 0;
-        TrackMouseEvent(&tme);
-        return 0;
-    }
-
-    case WM_MOUSELEAVE:
-        if (g_cheatBackHot) { g_cheatBackHot = FALSE; InvalidateRect(hwnd, &g_cheatBack, FALSE); }
-        return 0;
-
-    case WM_LBUTTONDOWN: {
-        POINT p;
-        p.x = GET_X_LPARAM(l); p.y = GET_Y_LPARAM(l);
-        /* not the tail of the double-click that opened this page */
-        if (g_cheatOpen && contains(g_cheatBack, p) &&
-            GetTickCount() - g_cheatTick >= GetDoubleClickTime())
-            show_cheat(NULL);
-        return 0;
-    }
-
-    case WM_SIZE: {
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        MoveWindow(hwndCheatFind, S(14), S(14),
-                   rc.right - S(28), S(28), TRUE);
-        MoveWindow(hwndCheatList, S(14), S(50),
-                   rc.right - S(28), rc.bottom - S(50) - S(32), TRUE);
-        return 0;
-    }
-
-    case WM_KEYDOWN:
-        if (w == VK_ESCAPE) { DestroyWindow(hwnd); return 0; }
-        break;
-
-    case WM_CLOSE:
-        DestroyWindow(hwnd);
-        return 0;
-
-    case WM_DESTROY:
-        hwndCheats = NULL;
-        hwndCheatFind = NULL;
-        hwndCheatList = NULL;
-        g_cheatOpen = NULL;
-        return 0;
-    }
-    return DefWindowProcA(hwnd, msg, w, l);
-}
-
-static void open_cheats(HWND owner)
-{
-    int w = S(560), h = S(520);
-    HINSTANCE inst = GetModuleHandleA(NULL);
-
-    if (hwndCheats) { SetForegroundWindow(hwndCheats); return; }
-
-    hwndCheats = CreateWindowExA(
-        WS_EX_DLGMODALFRAME, "AddaCheats", "Cheat sheet",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, w, h, owner, NULL, inst, NULL);
-    if (!hwndCheats) return;
-
-    hwndCheatFind = CreateWindowExA(0, "EDIT", "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-        0, 0, 0, 0, hwndCheats, (HMENU)(UINT_PTR)ID_CHEATFIND, inst, NULL);
-
-    hwndCheatList = CreateWindowExA(0, "LISTBOX", "",
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL |
-        LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY,
-        0, 0, 0, 0, hwndCheats, (HMENU)(UINT_PTR)ID_CHEATLIST, inst, NULL);
-
-    SendMessage(hwndCheatFind, WM_SETFONT, (WPARAM)hFontUI, TRUE);
-    SendMessage(hwndCheatList, WM_SETFONT, (WPARAM)hFontUI, TRUE);
-    theme_edit(hwndCheatFind);
-    theme_edit(hwndCheatList);
-
-    g_cheatPage = 0;                 /* always opens on the list of topics */
-    g_cheatOpen = NULL;
-    SetWindowTextA(hwndCheatFind, "");
-    refresh_cheats();
-
-    centre_on(hwndCheats, owner, w, h);
-    apply_titlebar(hwndCheats);
-    ShowWindow(hwndCheats, SW_SHOW);
-    SetFocus(hwndCheatFind);
+                        : "Click a topic, then anything in it, to see how it is done",
+            hFontSmall, g_t.muted, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
 }
 
 /* ═══════════════════════════════════════════════ full screen ══ */
@@ -3876,7 +3900,11 @@ static void ab_click(HWND hwnd, int item)
         check_code();
         break;
     case AB_CHEAT:
-        open_cheats(hwnd);
+        g_tab = 1;
+        refresh_cheats();
+        layout(hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+        if (hwndCheatFind && !g_cheatOpen) SetFocus(hwndCheatFind);
         break;
     case AB_GEAR:
         open_settings(hwnd);
@@ -3924,6 +3952,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             WS_CHILD | ES_AUTOHSCROLL,
             0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)ID_FIND, inst, NULL);
 
+        /* the cheat sheet's search box: a child of the main window now that
+         * the sheet is a tab rather than a window of its own */
+        hwndCheatFind = CreateWindowExA(0, "EDIT", "",
+            WS_CHILD | ES_AUTOHSCROLL,
+            0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)ID_CHEATFIND, inst, NULL);
+
         hwndFiles = CreateWindowExA(0, "LISTBOX", "",
             WS_CHILD | WS_VSCROLL | LBS_NOTIFY | LBS_HASSTRINGS,
             0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)ID_FILES, inst, NULL);
@@ -3931,6 +3965,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SendMessage(hwndCode,    WM_SETFONT, (WPARAM)hFontCode, TRUE);
         SendMessage(hwndConsole, WM_SETFONT, (WPARAM)hFontMono, TRUE);
         SendMessage(hwndFind,    WM_SETFONT, (WPARAM)hFontUI, TRUE);
+        SendMessage(hwndCheatFind, WM_SETFONT, (WPARAM)hFontUI, TRUE);
         SendMessage(hwndFiles,   WM_SETFONT, (WPARAM)hFontUI, TRUE);
 
         /* the EDIT default of 30000 characters is easy to hit in a console */
@@ -4006,9 +4041,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         p.x = GET_X_LPARAM(lParam);
         p.y = GET_Y_LPARAM(lParam);
 
+        if (g_tab == 1) {                 /* rows and the Back button light up */
+            int row = cheat_row_at(p);
+            BOOL back = g_cheatOpen && contains(g_cheatBack, p);
+            if (row != g_cheatHot || back != g_cheatBackHot) {
+                g_cheatHot = row;
+                g_cheatBackHot = back;
+                InvalidateRect(hwnd, &g_cheatArea, FALSE);
+            }
+        }
+
         if (g_dragging) {
             RECT rc;
-            int toolH = S(12), splitH = S(7), track, codeH, minPane = S(60);
+            int toolH = S(40), splitH = S(7), track, codeH, minPane = S(60);
             GetClientRect(hwnd, &rc);
             track = rc.bottom - toolH - splitH;
             if (track >= 2 * minPane) {
@@ -4097,6 +4142,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         break;
     }
 
+    /* The wheel goes to whatever has the focus, which on the cheat sheet is
+     * the search box - so it never reached the list. Take it here instead. */
+    case WM_MOUSEWHEEL: {
+        POINT p;
+        p.x = GET_X_LPARAM(lParam);
+        p.y = GET_Y_LPARAM(lParam);
+        ScreenToClient(hwnd, &p);
+        if (g_tab == 1 && contains(g_cheatArea, p)) {
+            g_cheatScroll -= GET_WHEEL_DELTA_WPARAM(wParam) * S(40) / WHEEL_DELTA;
+            cheat_clamp_scroll();
+            InvalidateRect(hwnd, &g_cheatArea, FALSE);
+            return 0;
+        }
+        break;
+    }
+
     case WM_LBUTTONDOWN: {
         POINT p;
         RECT hit;
@@ -4104,6 +4165,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         p.x = GET_X_LPARAM(lParam);
         p.y = GET_Y_LPARAM(lParam);
+
+        /* the tab strip */
+        if (contains(g_tabRect[0], p) || contains(g_tabRect[1], p)) {
+            g_tab = contains(g_tabRect[1], p) ? 1 : 0;
+            if (g_tab == 1) refresh_cheats();
+            layout(hwnd);
+            InvalidateRect(hwnd, NULL, FALSE);
+            SetFocus(g_tab ? (g_cheatOpen ? hwnd : hwndCheatFind) : hwndCode);
+            return 0;
+        }
+
+        if (g_tab == 1) {                 /* the cheat sheet owns the area */
+            if (g_cheatOpen) {
+                if (contains(g_cheatBack, p)) show_cheat(NULL);
+            } else {
+                int row = cheat_row_at(p);
+                if (row >= 0) open_cheat(row);
+            }
+            return 0;
+        }
 
         hit = g_splitRect;
         InflateRect(&hit, 0, S(3));
@@ -4240,6 +4321,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case ID_FIND:
             if (HIWORD(wParam) == EN_CHANGE) find_in_code(FALSE);
             return 0;
+        case ID_CHEATFIND:
+            if (HIWORD(wParam) == EN_CHANGE) refresh_cheats();
+            return 0;
         case ID_CODE:
             /* a new or removed line renumbers everything below it */
             if (HIWORD(wParam) == EN_CHANGE && !g_loading) {
@@ -4327,14 +4411,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
     wc.lpszClassName = "AddaSettings";
     RegisterClassA(&wc);
 
-    memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc   = CheatsProc;
-    wc.hInstance     = hInst;
-    wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = NULL;
-    wc.lpszClassName = "AddaCheats";
-    RegisterClassA(&wc);
-
     hwnd = CreateWindowExA(
         0, "AddaGUI", "Adda",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
@@ -4349,20 +4425,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
          * own page, goes back to the list first */
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
             HWND top = GetAncestor(msg.hwnd, GA_ROOT);
-            if (top == hwndCheats && g_cheatOpen) {
-                show_cheat(NULL);
+            if (top == hwnd && g_tab == 1) {   /* back, then out of the sheet */
+                if (g_cheatOpen) show_cheat(NULL);
+                else {
+                    g_tab = 0;
+                    layout(hwnd);
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    SetFocus(hwndCode);
+                }
                 continue;
             }
-            if (top == hwndCheats || top == hwndSettings) {
+            if (top == hwndSettings) {
                 DestroyWindow(top);
                 continue;
             }
         }
-        /* Enter in the cheat search or list opens the selected row */
+        /* Enter in the cheat search opens the first row it found */
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN &&
-            (msg.hwnd == hwndCheatFind || msg.hwnd == hwndCheatList)) {
-            open_cheat((int)SendMessageA(hwndCheatList, LB_GETCURSEL, 0, 0));
+            msg.hwnd == hwndCheatFind) {
+            if (g_cheatCount) open_cheat(0);
             continue;
+        }
+        /* the wheel is sent to the focused window, so hand it to the main one
+         * whenever the pointer is over the cheat sheet */
+        if (msg.message == WM_MOUSEWHEEL && g_tab == 1) {
+            POINT p;
+            p.x = GET_X_LPARAM(msg.lParam);
+            p.y = GET_Y_LPARAM(msg.lParam);
+            ScreenToClient(hwnd, &p);
+            if (contains(g_cheatArea, p)) {
+                SendMessageA(hwnd, WM_MOUSEWHEEL, msg.wParam, msg.lParam);
+                continue;
+            }
         }
         /* F2 and Delete act on the file list */
         if (msg.message == WM_KEYDOWN && msg.hwnd == hwndFiles) {
