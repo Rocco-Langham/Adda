@@ -327,7 +327,7 @@ static void apply_theme(void);
 static void layout(void);
 static void open_settings(void);
 static void open_cheats(void);
-static void close_cheats(void);
+
 static void leave_cheats(void);
 static void refresh_cheats(void);
 static void open_cheat(NSInteger shownIndex);
@@ -2916,11 +2916,6 @@ static void open_cheats(void)
     if (!g_cheatOpen) [g_win makeFirstResponder:g_cheatFind];
 }
 
-/* Puts the cheat sheet away. The button in the activity bar brings it back. */
-static void close_cheats(void)
-{
-    close_tab(open_count());
-}
 
 /* Esc: back to your code, with the tab left where it was. */
 static void leave_cheats(void)
