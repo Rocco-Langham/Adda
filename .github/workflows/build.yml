@@ -16,9 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: ./build.sh
+        run: sh ./build.sh
       - name: Tests
-        run: ./tests/run.sh
+        run: sh ./tests/run.sh
 
   windows:
     runs-on: windows-latest
@@ -31,17 +31,17 @@ jobs:
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc
+          install: mingw-w64-ucrt-x86_64-gcc diffutils
       - name: Build
-        run: ./build.sh
+        run: sh ./build.sh
       - name: Tests
-        run: ./tests/run.sh
+        run: sh ./tests/run.sh
 
   linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: ./build.sh            # the interpreter only: there is no GUI here
+        run: sh ./build.sh            # the interpreter only: there is no GUI here
       - name: Tests
-        run: ./tests/run.sh
+        run: sh ./tests/run.sh
