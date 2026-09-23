@@ -277,6 +277,10 @@ static BOOL system_is_dark(void)
  * dashes where the code box can show them (the usual Windows code page), else ==> */
 static BOOL g_tidy = TRUE;
 static BOOL g_tidying;                /* our own change to the text, not typing */
+/* The caret's own line is shown raw so it can be typed in - but only once
+ * something is actually typed. Clicking on a tidied line, or arrowing onto it,
+ * leaves the arrows where they are. */
+static BOOL g_typing;
 static const char *tidy_arrow(void) { return GetACP() == 1252 ? "\x97\x97>" : "==>"; }
 /* before each line in a delay: there is no corner in these code pages */
 static const char *tidy_branch(void) { return GetACP() == 1252 ? "|\x97>" : "|->"; }
@@ -2256,7 +2260,8 @@ static void tidy_update(void)
         if (text[i] == '\n') { caretLine++; lineStart = i + 1; }
     caretCol = (long)selA - lineStart;
 
-    n = tidy_edits(text, tidy_arrow(), tidy_branch(), GetFocus() == hwndCode ? caretLine : -1, g_tidy, ed, 128);
+    n = tidy_edits(text, tidy_arrow(), tidy_branch(),
+                   (g_typing && GetFocus() == hwndCode) ? caretLine : -1, g_tidy, ed, 128);
     if (!n) { free(text); return; }
 
     g_tidying = TRUE;
@@ -2813,6 +2818,17 @@ static LRESULT CALLBACK CodeProc(HWND h, UINT msg, WPARAM w, LPARAM l,
     }
     if (msg == WM_MOUSELEAVE || msg == WM_KEYDOWN || msg == WM_MOUSEWHEEL || msg == WM_VSCROLL)
         tip_hide();
+    /* Moving the caret is not typing, so the line it lands on keeps its
+     * arrows. These keys move it without changing anything. */
+    if (msg == WM_KEYUP)
+        switch (w) {
+        case VK_LEFT: case VK_RIGHT: case VK_UP:    case VK_DOWN:
+        case VK_HOME: case VK_END:   case VK_PRIOR: case VK_NEXT:
+            g_typing = FALSE;
+            break;
+        }
+    if (msg == WM_LBUTTONUP || msg == WM_KILLFOCUS) g_typing = FALSE;
+
     /* the caret may have moved onto a tidy line, or off one */
     if ((msg == WM_KEYUP || msg == WM_LBUTTONUP || msg == WM_SETFOCUS || msg == WM_KILLFOCUS) &&
         !g_tidying)
@@ -4445,6 +4461,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* a new or removed line renumbers everything below it */
             if (HIWORD(wParam) == EN_CHANGE && !g_loading) {
                 g_dirty = TRUE;              /* belongs to the open file now */
+                g_typing = TRUE;             /* now the caret's line shows raw */
                 PostMessageA(hwnd, WM_TIDY, 0, 0);
             }
             if (HIWORD(wParam) == EN_CHANGE && g_chkCount) {
