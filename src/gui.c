@@ -2480,7 +2480,8 @@ static COLORREF code_colour(ColourKind k)
  * corner with a rounded bezier, so a `details` block reads as one line coming
  * down and curving into each setting under it.
  */
-static void draw_smooth_arrow(HDC dst, RECT box, BOOL branch, COLORREF ink, COLORREF bg)
+static void draw_smooth_arrow(HDC dst, RECT box, BOOL branch, BOOL more,
+                              COLORREF ink, COLORREF bg)
 {
     const int ss = 4;
     int w = box.right - box.left, h = box.bottom - box.top;
@@ -2522,6 +2523,7 @@ static void draw_smooth_arrow(HDC dst, RECT box, BOOL branch, COLORREF ink, COLO
         POINT curve[4];
         MoveToEx(mem, x, 0, NULL);
         LineTo(mem, x, cy - r);
+        if (more) { MoveToEx(mem, x, cy - r, NULL); LineTo(mem, x, H); }   /* carries on down */
         curve[0].x = x;     curve[0].y = cy - r;
         curve[1].x = x;     curve[1].y = cy;
         curve[2].x = x;     curve[2].y = cy;
@@ -2611,7 +2613,21 @@ static void paint_colours(HWND h)
                 box.right = (short)LOWORD(b);
                 box.top = (short)HIWORD(a);
                 box.bottom = box.top + lineH;
-                draw_smooth_arrow(dc, box, branch, code_colour(COL_ARROW), g_t.surface);
+                {
+                    BOOL more = FALSE;
+                    if (branch) {      /* does the line below carry the trunk on? */
+                        int q = to;
+                        while (q < len && text[q] != 0x0a) q++;
+                        if (q < len) {
+                            q++;
+                            while (q < len && (text[q] == 0x20 || text[q] == 0x09)) q++;
+                            more = (q < len && (text[q] == 0x7c ||
+                                                (unsigned char)text[q] == 0xE2));
+                        }
+                    }
+                    draw_smooth_arrow(dc, box, branch, more,
+                                      code_colour(COL_ARROW), g_t.surface);
+                }
                 continue;
             }
         }

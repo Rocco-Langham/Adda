@@ -120,6 +120,9 @@ int main(void)
     roundtrip("while",         "while [c] < 5\n    print [c]\nend\n");
     roundtrip("define",        "define greet with [who]\n    print Hi [who]\nend\n");
     roundtrip("app",           "openApplication My Game\nprint Hello\n");
+    roundtrip("app details",   "openApplication My Game\ndetails\ntitle Hello\n"
+                               "colour yellow\nprint hi\n");
+    roundtrip("details alone", "openApplication Game\ndetails\ntitle Hi\n");
 
     /* text that looks like the tidy view's own marks */
     roundtrip("ascii arrow",   "print a ==> b\n");

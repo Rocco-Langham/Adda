@@ -517,12 +517,14 @@ static size_t details_at(const char *p, const char *e)
     return (e - p > 7 && p[7] == ';') ? 8 : 7;
 }
 
-static bool app_start(const char *s, const char *e, const char *arrow)
+static bool app_start(const char *s, const char *e, const char *arrow, const char *branch)
 {
     const char *p = skip_sp(s, e);
     size_t d;
 
     e = trim_back(s, e);
+    /* the details line carries a branch in the tidy view, so look past it */
+    if (branch && starts(p, e, branch)) p = skip_sp(p + strlen(branch), e);
     if ((d = details_at(p, e)) != 0) return skip_sp(p + d, e) == e;   /* on its own line */
     if (!word_at(p, e, "openApplication")) return false;
     p = skip_sp(p + 15, e);
@@ -570,10 +572,20 @@ static bool is_setting(const char *s, const char *e, const char *branch)
     return false;
 }
 
-/* either kind of block whose lines get the branch */
-static bool branch_start(const char *s, const char *e, const char *arrow)
+/* a line that is just `details`, with or without its branch */
+static bool details_only(const char *s, const char *e, const char *branch)
 {
-    return delay_start(s, e) || app_start(s, e, arrow);
+    const char *p = skip_sp(s, e);
+    size_t d;
+    e = trim_back(s, e);
+    if (branch && starts(p, e, branch)) p = skip_sp(p + strlen(branch), e);
+    return (d = details_at(p, e)) != 0 && skip_sp(p + d, e) == e;
+}
+
+/* either kind of block whose lines get the branch */
+static bool branch_start(const char *s, const char *e, const char *arrow, const char *branch)
+{
+    return delay_start(s, e) || app_start(s, e, arrow, branch);
 }
 
 /* openApplication details  <->  openApplication ——> details. NULL: unchanged */
@@ -634,14 +646,14 @@ static int delay_end(Line *ls, int n, int i, const char *arrow, const char *bran
     int j, last = -1;
 
     *hasEnd = true;
-    if (!branch_start(ls[i].s, ls[i].e, arrow)) return -1;
+    if (!branch_start(ls[i].s, ls[i].e, arrow, branch)) return -1;
     for (j = i + 1; j < n; j++) {
         const char *s = ls[j].s, *e = ls[j].e, *p = after_branch(s, e, branch);
         if (!p) p = skip_sp(s, e);
         if (p == e) continue;                               /* a blank line */
         if (delay_close(p, e)) return j;
         if (app) {                                          /* settings need no end */
-            if (!is_setting(s, e, branch)) break;
+            if (!is_setting(s, e, branch) && !details_only(s, e, branch)) break;
             last = j;
             continue;
         }
@@ -674,7 +686,8 @@ static char *convert_delay_line(const char *s, const char *e, const char *arrow,
 
 /* A line inside, tidied or turned back to raw. NULL: unchanged. */
 static char *convert_delay_inner(const char *s, const char *e, const char *indent,
-                                 size_t indentLen, const char *branch, bool to_tidy, bool isEnd)
+                                 size_t indentLen, const char *branch, bool to_tidy,
+                                 bool isEnd, bool indentBack)
 {
     const char *code = after_branch(s, e, branch);
     Buf o = { NULL, 0, 0 };
@@ -688,7 +701,9 @@ static char *convert_delay_inner(const char *s, const char *e, const char *inden
     } else {
         if (!code) return NULL;
         put(&o, indent, indentLen);
-        if (!isEnd) puts_(&o, "    ");                      /* an end goes back under its delay */
+        /* a delay indents what is inside it; an openApplication's settings were
+         * never indented, so putting one in would rewrite the file */
+        if (!isEnd && indentBack) puts_(&o, "    ");
     }
     put(&o, code, (size_t)(e - code));
     return done(&o);
@@ -706,12 +721,15 @@ static char *convert_delay(Line *ls, int i, int j, bool hasEnd, const char *arro
     for (k = i; k <= j; k++) {
         bool tidyThis = to_tidy && k != caretLine;
         char *c;
-        if (k == i)                                         /* delay - 500, openApplication details */
-            c = delay_start(ls[k].s, ls[k].e) ? convert_delay_line(ls[k].s, ls[k].e, arrow, tidyThis)
-                                              : convert_app_line(ls[k].s, ls[k].e, arrow, tidyThis);
+        if (k == i && delay_start(ls[k].s, ls[k].e))
+            c = convert_delay_line(ls[k].s, ls[k].e, arrow, tidyThis);
+        else if (k == i && !details_only(ls[k].s, ls[k].e, branch))
+            c = convert_app_line(ls[k].s, ls[k].e, arrow, tidyThis);
         else
+            /* a details line on its own gets the branch too, so the line comes
+             * down from the openApplication above it and curves into it */
             c = convert_delay_inner(ls[k].s, ls[k].e, ls[i].s, indent, branch, tidyThis,
-                                    hasEnd && k == j);
+                                    hasEnd && k == j, hasEnd);
         if (k != i && !(hasEnd && k == j)) {
             c = and_print(c, ls[k].s, ls[k].e, arrow, branch, tidyThis, true);
             {                                               /* colour ——> yellow */
@@ -736,7 +754,7 @@ static char *convert_stray(const char *s, const char *e, const char *arrow, cons
     Buf o = { NULL, 0, 0 };
 
     if (delay_start(s, e)) return convert_delay_line(s, e, arrow, false);
-    if (app_start(s, e, arrow) && word_at(skip_sp(s, e), e, "openApplication"))
+    if (app_start(s, e, arrow, NULL) && word_at(skip_sp(s, e), e, "openApplication"))
         return convert_app_line(s, e, arrow, false);
     if (!code) return NULL;
     put(&o, s, (size_t)(p - s));
