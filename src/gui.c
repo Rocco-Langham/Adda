@@ -141,12 +141,21 @@ static HWND  hwndFind, hwndFiles;
 static HWND  hwndSettings;
 static HWND  hwndCheatFind;
 
-/* 0: your code. 1: the cheat sheet. Both live in the editor area. */
+/* The tabs along the top of the editor: one for each open file, then the
+ * cheat sheet's when it is open. g_tab is the one showing; the cheat sheet's
+ * is always numbered g_openCount, just past the last file. */
+#define MAX_TABS 12
 static int   g_tab;
-static RECT  g_tabRect[2];
-static RECT  g_tabX[2];           /* the x that shuts each one */
+static RECT  g_tabRect[MAX_TABS + 1];
+static RECT  g_tabX[MAX_TABS + 1];   /* the x that shuts each one */
 static int   g_tabXHot = -1;      /* the x under the pointer, or -1 */
 static BOOL  g_cheatTab;          /* is the cheat sheet tab open at all */
+static int   g_openCount = 1;     /* file tabs: you start with one, untitled */
+static int   g_fileTab;           /* the file tab in the editor, even under the cheat sheet */
+
+static int  tab_count(void)  { return g_openCount + (g_cheatTab ? 1 : 0); }
+static BOOL is_cheats(int t) { return g_cheatTab && t == g_openCount; }
+static BOOL on_cheats(void)  { return is_cheats(g_tab); }
 
 static HBRUSH hBrushBg, hBrushSurface, hBrushAb;
 static HFONT  hFontMono, hFontCode, hFontCodeBold, hFontUI, hFontUIBold, hFontSmall;
@@ -210,6 +219,18 @@ static HANDLE g_out = NULL, g_err = NULL, g_in = NULL;
 static BOOL   g_running = FALSE;
 static char   g_tmp_file[MAX_PATH * 2];
 static char   g_curPath[MAX_PATH * 3];  /* the file in the editor, or "" */
+
+/* Each open file. The one in the editor lives there - g_curPath, g_dirty and
+ * the text itself - and its entry here is brought up to date when it is left.
+ * The others keep what the editor showed in `text`, so switching back finds
+ * it exactly as it was, tidy view, caret and all. */
+typedef struct {
+    char  path[MAX_PATH * 3];     /* "" for the untitled one */
+    char *text;                   /* what it showed, while it is not showing */
+    BOOL  dirty;
+    DWORD caret;
+} OpenTab;
+static OpenTab g_open[MAX_TABS];
 static int    g_anchor = 0;         /* where the typed line starts */
 
 /* ── files in the Explorer ───────────────────────────────────────── */
@@ -254,6 +275,7 @@ static void cheat_clamp_scroll(void);
 static void paint_cheats(HDC hdc);
 static int  cheat_row_at(POINT p);
 static RECT g_cheatArea;
+static RECT g_cheatFindBox;       /* the frame drawn round the search box */
 static int  g_cheatScroll;
 static int  g_cheatHot = -1;      /* the cheat-sheet row under the pointer */
 static void inq_clear(void);
@@ -816,7 +838,20 @@ static BOOL contains(RECT r, POINT p)
  * nothing to put away, and shutting it would throw away what was typed. */
 static BOOL tab_x_shown(int t)
 {
-    return t == 1 ? g_cheatTab : g_curPath[0] != '\0';
+    if (is_cheats(t)) return TRUE;
+    if (t < 0 || t >= g_openCount) return FALSE;
+    return (t == g_fileTab ? g_curPath : g_open[t].path)[0] != '\0';
+}
+
+/* What tab t is called: the file's own name, or "Your code" */
+static const char *tab_name(int t)
+{
+    const char *path, *leaf;
+    if (is_cheats(t)) return "Cheat sheet";
+    path = (t == g_fileTab) ? g_curPath : g_open[t].path;
+    if (!path[0]) return "Your code";
+    leaf = strrchr(path, '\\');
+    return leaf ? leaf + 1 : path;
 }
 
 /* case-insensitive substring */
@@ -1219,8 +1254,8 @@ static char *read_whole(const char *path, long *size)
  * cheat sheet tab the output has nowhere to show. */
 static void show_code_tab(void)
 {
-    if (g_tab == 0) return;
-    g_tab = 0;
+    if (!on_cheats()) return;
+    g_tab = g_fileTab;
     layout(hwndMain);
     InvalidateRect(hwndMain, NULL, FALSE);
 }
@@ -1612,6 +1647,7 @@ static void rescan_files(void)
  * run, and on closing - so typing in one never turns up in another. */
 static BOOL g_dirty;                  /* typed in since it was loaded or saved */
 static BOOL g_loading;                /* the EN_CHANGE is ours, not typing */
+static int  g_chkCount;               /* the problem finder's marks up */
 
 /* The code box's text as it really is - the tidy view turned back to raw,
  * since it is only a way of showing the code - with the EDIT control's \r\n
@@ -1681,47 +1717,212 @@ static void save_current(void)
                      "Save", MB_OK | MB_ICONWARNING);
 }
 
-static void open_file(int index)
+/* ═══════════════════════════════════════════════════════ tabs ══ */
+
+/* A file as the editor wants it, with \n made \r\n (malloc'd), or NULL. */
+static char *read_for_editor(const char *path)
 {
-    FILE *f;
+    FILE *f = fopen(path, "rb");
     long size;
-    char *buf;
+    char *raw, *buf = NULL;
 
-    if (index < 0 || index >= g_fileCount) return;
-    if (strcmp(g_files[index].path, g_curPath) == 0) return;   /* already open */
-    save_current();
-
-    f = fopen(g_files[index].path, "rb");
-    if (!f) return;
+    if (!f) return NULL;
     fseek(f, 0, SEEK_END);
     size = ftell(f);
     fseek(f, 0, SEEK_SET);
-
-    buf = (char *)malloc((size_t)size * 2 + 2);
-    if (buf) {
-        char *raw = (char *)malloc((size_t)size + 1);
-        if (raw) {
-            size_t got = fread(raw, 1, (size_t)size, f);
-            size_t i, j = 0;
-            raw[got] = '\0';
+    raw = size >= 0 ? malloc((size_t)size + 1) : NULL;
+    if (raw) {
+        size_t got = fread(raw, 1, (size_t)size, f), i, j = 0;
+        raw[got] = '\0';
+        buf = malloc(got * 2 + 1);
+        if (buf) {
             for (i = 0; i < got; i++) {          /* \n -> \r\n for the EDIT */
                 if (raw[i] == '\n' && (i == 0 || raw[i - 1] != '\r'))
                     buf[j++] = '\r';
                 buf[j++] = raw[i];
             }
             buf[j] = '\0';
-            g_loading = TRUE;
-            SetWindowTextA(hwndCode, buf);
-            g_loading = FALSE;
-            snprintf(g_curPath, sizeof g_curPath, "%s", g_files[index].path);
-            g_dirty = FALSE;
-            show_current();
-            PostMessageA(hwndMain, WM_TIDY, 0, 0);
-            free(raw);
         }
-        free(buf);
+        free(raw);
     }
     fclose(f);
+    return buf;
+}
+
+/* The editor's text as it is shown (malloc'd). */
+static char *shown_text(void)
+{
+    int n = GetWindowTextLengthA(hwndCode);
+    char *s = malloc((size_t)n + 1);
+    if (s) GetWindowTextA(hwndCode, s, n + 1);
+    return s;
+}
+
+/* Takes the editor back into the file tab it belongs to: saved, and its
+ * text, dirty flag and caret kept for when it comes back. */
+static void leave_tab(void)
+{
+    OpenTab *o = &g_open[g_fileTab];
+    DWORD a = 0;
+
+    save_current();
+    snprintf(o->path, sizeof o->path, "%s", g_curPath);   /* Save As may have moved it */
+    free(o->text);
+    o->text = shown_text();
+    o->dirty = g_dirty;
+    SendMessageA(hwndCode, EM_GETSEL, (WPARAM)&a, 0);
+    o->caret = a;
+}
+
+/* Puts file tab t into the editor. Whatever the editor held must already
+ * have been left, or be meant to go. */
+static void enter_tab(int t)
+{
+    OpenTab *o = &g_open[t];
+    char *text = o->text;
+
+    o->text = NULL;
+    if (!text && o->path[0]) text = read_for_editor(o->path);
+    g_loading = TRUE;
+    SetWindowTextA(hwndCode, text ? text : "");
+    g_loading = FALSE;
+    free(text);
+
+    snprintf(g_curPath, sizeof g_curPath, "%s", o->path);
+    g_dirty = o->dirty;
+    g_chkCount = 0;                       /* the marks were on the other text */
+    g_typing = FALSE;                     /* arriving is not typing */
+    SendMessageA(hwndCode, EM_SETSEL, (WPARAM)o->caret, (LPARAM)o->caret);
+    SendMessageA(hwndCode, EM_SCROLLCARET, 0, 0);
+    SendMessageA(hwndCode, EM_EMPTYUNDOBUFFER, 0, 0);   /* undo would bring the other back */
+    g_tab = g_fileTab = t;
+    show_current();
+    PostMessageA(hwndMain, WM_TIDY, 0, 0);
+
+    {   /* the Explorer follows along, and shows nothing picked for "Your code" */
+        int i, row = -1;
+        for (i = 0; i < g_fileCount; i++)
+            if (g_curPath[0] && strcmp(g_files[i].path, g_curPath) == 0) row = i;
+        SendMessageA(hwndFiles, LB_SETCURSEL, (WPARAM)row, 0);
+    }
+}
+
+static void switch_tab(int t)
+{
+    if (t < 0 || t >= tab_count()) return;
+    if (is_cheats(t)) {
+        if (!on_cheats()) refresh_cheats();
+        g_tab = t;
+    } else if (t != g_fileTab) {
+        leave_tab();
+        enter_tab(t);
+    } else {
+        g_tab = t;                        /* back from the cheat sheet */
+    }
+    g_tabXHot = -1;
+    layout(hwndMain);
+    InvalidateRect(hwndMain, NULL, FALSE);
+    SetFocus(on_cheats() ? (g_cheatOpen ? hwndMain : hwndCheatFind) : hwndCode);
+}
+
+/* Opens `path` in a tab: its own if it has one already. Otherwise a new one,
+ * unless the untitled tab is sitting there empty, which it takes over. */
+static void open_path(const char *path)
+{
+    FILE *f;
+    int i, t;
+
+    for (i = 0; i < g_openCount; i++)
+        if (strcmp(i == g_fileTab ? g_curPath : g_open[i].path, path) == 0) {
+            switch_tab(i);
+            return;
+        }
+
+    f = fopen(path, "rb");                /* nothing is disturbed for a file we cannot read */
+    if (!f) return;
+    fclose(f);
+
+    if (!g_curPath[0] && GetWindowTextLengthA(hwndCode) == 0) {
+        t = g_fileTab;                    /* nothing in it to keep */
+    } else {
+        leave_tab();
+        if (g_openCount < MAX_TABS) {
+            t = g_openCount++;
+        } else {
+            t = g_fileTab;                /* full: the one showing makes way */
+            free(g_open[t].text);
+        }
+    }
+    memset(&g_open[t], 0, sizeof g_open[t]);
+    snprintf(g_open[t].path, sizeof g_open[t].path, "%s", path);
+    enter_tab(t);
+    g_tabXHot = -1;
+    layout(hwndMain);
+    InvalidateRect(hwndMain, NULL, FALSE);
+}
+
+static void open_file(int index)
+{
+    if (index < 0 || index >= g_fileCount) return;
+    open_path(g_files[index].path);
+}
+
+/* Takes tab t away. `keep` saves it first; a deleted file's tab must not be,
+ * or the file would come straight back. With every file shut, one untitled
+ * tab is left, so there is always somewhere to type. */
+static void drop_tab(int t, BOOL keep)
+{
+    BOOL showing = (t == g_fileTab), wasCheats = on_cheats();
+    int i;
+
+    if (t < 0 || t >= g_openCount) return;
+    if (showing && keep) save_current();
+    free(g_open[t].text);
+    for (i = t; i < g_openCount - 1; i++) g_open[i] = g_open[i + 1];
+    g_openCount--;
+    memset(&g_open[g_openCount], 0, sizeof g_open[g_openCount]);
+
+    if (g_openCount == 0) {               /* the last one: an empty untitled tab */
+        g_openCount = 1;
+        g_dirty = FALSE;
+        g_curPath[0] = '\0';
+        enter_tab(0);
+    } else if (showing) {
+        g_curPath[0] = '\0';
+        g_dirty = FALSE;                  /* nothing left to save it into */
+        enter_tab(t < g_openCount ? t : g_openCount - 1);
+    } else if (t < g_fileTab) {
+        g_fileTab--;
+    }
+    g_tab = wasCheats ? g_openCount : g_fileTab;
+    g_tabXHot = -1;
+    layout(hwndMain);
+    InvalidateRect(hwndMain, NULL, FALSE);
+}
+
+/* The x on a tab */
+static void close_tab(int t)
+{
+    if (is_cheats(t)) {
+        g_cheatTab = FALSE;
+        g_tab = g_fileTab;
+        g_tabXHot = -1;
+        layout(hwndMain);
+        InvalidateRect(hwndMain, NULL, FALSE);
+        SetFocus(hwndCode);
+        return;
+    }
+    drop_tab(t, TRUE);
+    if (!on_cheats()) SetFocus(hwndCode);
+}
+
+/* The tab holding `path`, or -1 */
+static int tab_of(const char *path)
+{
+    int i;
+    for (i = 0; i < g_openCount; i++)
+        if (strcmp(i == g_fileTab ? g_curPath : g_open[i].path, path) == 0) return i;
+    return -1;
 }
 
 /* ══════════════════════════════════════ renaming and deleting ══ */
@@ -1800,9 +2001,15 @@ static void end_rename(BOOL commit)
         SetFocus(hwndFiles);
         return;
     }
-    if (strcmp(g_files[idx].path, g_curPath) == 0) {   /* the open file moves with it */
-        snprintf(g_curPath, sizeof g_curPath, "%s", target);
-        show_current();
+    {   /* a tab holding it moves with it */
+        int t = tab_of(g_files[idx].path);
+        if (t == g_fileTab) {
+            snprintf(g_curPath, sizeof g_curPath, "%s", target);
+            show_current();
+        } else if (t >= 0) {
+            snprintf(g_open[t].path, sizeof g_open[t].path, "%s", target);
+        }
+        InvalidateRect(hwndMain, NULL, FALSE);
     }
 
     rescan_files();
@@ -1883,12 +2090,8 @@ static void delete_selected(void)
                     MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
         return;
 
-    /* the open file is going: it must not be written back afterwards */
-    if (strcmp(g_files[sel].path, g_curPath) == 0) {
-        g_curPath[0] = '\0';
-        g_dirty = FALSE;
-        show_current();
-    }
+    /* its tab goes with it, unsaved: it must not be written back afterwards */
+    drop_tab(tab_of(g_files[sel].path), FALSE);
 
     /* pFrom is a list, so it has to end with TWO NULs */
     memset(from, 0, sizeof(from));
@@ -2093,24 +2296,31 @@ static void layout(HWND hwnd)
 
     /* the tab strip, and the cheat sheet's area underneath it */
     {
-        int tabH = S(30), tw = S(150), t;
-        g_tabRect[0].left = x + pad;
-        g_tabRect[0].right = g_tabRect[0].left + tw;
-        g_tabRect[0].top = S(4);
-        g_tabRect[0].bottom = S(4) + tabH;
-        g_tabRect[1] = g_tabRect[0];
-        g_tabRect[1].left = g_tabRect[0].right + S(4);
-        g_tabRect[1].right = g_tabRect[1].left + tw;
-        if (!g_cheatTab) SetRectEmpty(&g_tabRect[1]);   /* shut, so not there */
+        /* as wide as a name wants, until there are too many to fit, and then
+         * they share the width between them */
+        int tabH = S(30), gap = S(4), n = tab_count(), t;
+        int left = x + pad, room = rc.right - pad - left;
+        int tw = (room - gap * (n - 1)) / (n ? n : 1);
+        if (tw > S(170)) tw = S(170);
+        if (tw < S(64))  tw = S(64);
 
-        for (t = 0; t < 2; t++) {                       /* the x on each tab */
+        for (t = 0; t <= MAX_TABS; t++) {
             int side = S(16);
-            g_tabX[t] = g_tabRect[t];
+            if (t >= n) {                               /* no such tab */
+                SetRectEmpty(&g_tabRect[t]);
+                SetRectEmpty(&g_tabX[t]);
+                continue;
+            }
+            g_tabRect[t].left   = left + t * (tw + gap);
+            g_tabRect[t].right  = g_tabRect[t].left + tw;
+            g_tabRect[t].top    = S(4);
+            g_tabRect[t].bottom = S(4) + tabH;
+
+            g_tabX[t] = g_tabRect[t];                   /* the x on each tab */
             g_tabX[t].right  = g_tabRect[t].right - S(8);
             g_tabX[t].left   = g_tabX[t].right - side;
             g_tabX[t].top    = g_tabRect[t].top + (tabH - side) / 2;
             g_tabX[t].bottom = g_tabX[t].top + side;
-            if (IsRectEmpty(&g_tabRect[t])) SetRectEmpty(&g_tabX[t]);
         }
 
         g_cheatArea.left = x + pad;
@@ -2146,15 +2356,21 @@ static void layout(HWND hwnd)
         ShowWindow(hwndFind, SW_HIDE);
     }
 
-    if (g_tab == 1) {                    /* the cheat sheet has the area */
+    if (on_cheats()) {                   /* the cheat sheet has the area */
         dwp = move_child(dwp, hwndCode, x + pad, y,
                          w - pad * 2, codeH - S(6), SWP_HIDEWINDOW);
         dwp = move_child(dwp, hwndConsole, x + pad, y + codeH + splitH,
                          w - pad * 2, consoleH - S(10), SWP_HIDEWINDOW);
+        /* The search box is borderless, and an EDIT puts its text at the top,
+         * so it sits in the middle of a frame paint_cheats draws round it. */
+        g_cheatFindBox.left   = g_cheatArea.left + S(10);
+        g_cheatFindBox.right  = g_cheatArea.right - S(10);
+        g_cheatFindBox.top    = g_cheatArea.top + S(8);
+        g_cheatFindBox.bottom = g_cheatFindBox.top + S(30);
         if (hwndCheatFind)
             dwp = move_child(dwp, hwndCheatFind,
-                             g_cheatArea.left + S(10), g_cheatArea.top + S(8),
-                             g_cheatArea.right - g_cheatArea.left - S(20), S(28),
+                             g_cheatFindBox.left + S(10), g_cheatFindBox.top + S(6),
+                             g_cheatFindBox.right - g_cheatFindBox.left - S(20), S(19),
                              g_cheatOpen ? SWP_HIDEWINDOW : SWP_SHOWWINDOW);
     } else {
         dwp = move_child(dwp, hwndCode, x + pad, y,
@@ -2196,7 +2412,6 @@ static void layout(HWND hwnd)
 
 typedef struct { int line, col, len; char msg[240]; } CheckMark;   /* line 1-based, col in chars */
 static CheckMark g_chk[MAX_CHECK];
-static int       g_chkCount;
 
 /* Hovering over a marked line shows what is wrong with it. A tracking
  * tooltip, moved and filled in by hand from CodeProc's mouse moves. */
@@ -2602,6 +2817,13 @@ static void paint_colours(HWND h)
 
     GetClientRect(h, &rc);
     dc = GetDC(h);
+    {   /* The control only draws inside its formatting rectangle, cutting the
+         * last row off where it ends, so what goes on top must stop there
+         * too - or a half-hidden bottom line spills out under the box. */
+        RECT fr;
+        SendMessageA(h, EM_GETRECT, 0, (LPARAM)&fr);
+        IntersectClipRect(dc, rc.left, fr.top, rc.right, fr.bottom);
+    }
     oldFont = SelectObject(dc, hFontCode);
     GetTextMetricsA(dc, &tm);
     lineH = tm.tmHeight ? tm.tmHeight : 1;
@@ -2777,6 +2999,7 @@ static void paint_gutter(HWND h)
     InflateRect(&g, 0, -S(6));
     fill_rect(dc, g, g_t.border);
 
+    IntersectClipRect(dc, 0, fmt.top, GUTTER_W, fmt.bottom);   /* as far as the text goes */
     oldFont = SelectObject(dc, hFontCode);
     GetTextMetricsA(dc, &tm);
     SetBkMode(dc, TRANSPARENT);
@@ -3012,28 +3235,20 @@ static void paint_main(HWND hwnd, HDC hdc)
 
     /* the tab strip, and the cheat sheet when it is the one showing */
     {
-        const char *names[2];
-        char fileTab[sizeof g_curPath + 8];
         int t;
 
-        if (g_curPath[0]) {
-            const char *leaf = strrchr(g_curPath, '\\');
-            snprintf(fileTab, sizeof fileTab, "%s", leaf ? leaf + 1 : g_curPath);
-        } else {
-            snprintf(fileTab, sizeof fileTab, "Your code");
-        }
-        names[0] = fileTab;
-        names[1] = "Cheat sheet";
-
-        for (t = 0; t < (g_cheatTab ? 2 : 1); t++) {
+        for (t = 0; t < tab_count(); t++) {
             RECT tab = g_tabRect[t], label = tab;
             BOOL on = (g_tab == t);
             COLORREF face = on ? g_t.surface : g_t.bg;
             round_fill(hdc, tab, face, RADIUS);
             if (on) round_frame(hdc, tab, g_t.border, RADIUS);
+            label.left += S(8);
             if (tab_x_shown(t))
                 label.right = g_tabX[t].left;    /* the name keeps clear of it */
-            text_at(hdc, label, names[t], on ? hFontUIBold : hFontUI,
+            else
+                label.right -= S(8);
+            text_at(hdc, label, tab_name(t), on ? hFontUIBold : hFontUI,
                     on ? g_t.text : g_t.muted,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             if (tab_x_shown(t)) {
@@ -3048,7 +3263,7 @@ static void paint_main(HWND hwnd, HDC hdc)
         }
     }
 
-    if (g_tab == 1) {
+    if (on_cheats()) {
         RECT frame = g_cheatArea;
         paint_cheats(hdc);
         InflateRect(&frame, 1, 1);
@@ -3615,6 +3830,8 @@ static int cheat_row_at(POINT p)
 {
     int i;
     if (g_cheatOpen || !contains(g_cheatArea, p)) return -1;
+    if (p.y < g_cheatArea.top + S(42) || p.y >= g_cheatArea.bottom - S(30))
+        return -1;                        /* scrolled under the search box or the hint */
     for (i = 0; i < g_cheatCount; i++)
         if (contains(cheat_row_rect(i), p)) return i;
     return -1;
@@ -3624,7 +3841,8 @@ static void paint_cheat_rows(HDC hdc)
 {
     int i;
 
-    g_cheatHeight = S(52) + g_cheatCount * CHEAT_ROW_H;
+    /* down to the last row's foot, clear of the hint underneath */
+    g_cheatHeight = S(46) + g_cheatCount * CHEAT_ROW_H + S(34);
     cheat_clamp_scroll();
 
     for (i = 0; i < g_cheatCount; i++) {
@@ -3656,13 +3874,13 @@ static void paint_cheat_rows(HDC hdc)
     /* a slim bar down the right, only while there is more than fits */
     if (g_cheatHeight > g_cheatArea.bottom - g_cheatArea.top) {
         int room = g_cheatArea.bottom - g_cheatArea.top;
+        int top = g_cheatArea.top + S(44), track = room - S(44) - S(32);
         RECT bar;
-        int h = room * room / g_cheatHeight;
+        int h = track * room / g_cheatHeight;
         if (h < S(24)) h = S(24);
         bar.right = g_cheatArea.right - S(3);
         bar.left = bar.right - S(4);
-        bar.top = g_cheatArea.top +
-                  (room - h) * g_cheatScroll / (g_cheatHeight - room);
+        bar.top = top + (track - h) * g_cheatScroll / (g_cheatHeight - room);
         bar.bottom = bar.top + h;
         round_fill(hdc, bar, g_t.border, S(2));
     }
@@ -3679,7 +3897,16 @@ static void paint_cheats(HDC hdc)
         page.top -= g_cheatScroll;      /* an entry's page scrolls too */
         paint_cheat_page(hdc, page);
     } else {
+        RECT fr = g_cheatFindBox;
+        /* the rows scroll between the search box and the hint, and are cut
+         * off at both rather than drawn over them */
+        SaveDC(hdc);
+        IntersectClipRect(hdc, g_cheatArea.left, g_cheatArea.top + S(42),
+                          g_cheatArea.right, g_cheatArea.bottom - S(30));
         paint_cheat_rows(hdc);
+        RestoreDC(hdc, -1);
+        InflateRect(&fr, 1, 1);
+        round_frame(hdc, fr, g_t.border, RADIUS);
     }
 
     hint.left += S(14);
@@ -3820,17 +4047,21 @@ static void import_menu(HWND hwnd)
     if (pick == 2) import_folder(hwnd);
 }
 
-/* Puts the open file away: saved, and out of the editor. */
-static void close_file(void)
+/* Puts every open file away, saved, leaving one empty untitled tab. */
+static void close_all_files(void)
 {
+    BOOL wasCheats = on_cheats();
+    int i;
+
     save_current();
+    for (i = 0; i < g_openCount; i++) free(g_open[i].text);
+    memset(g_open, 0, sizeof g_open);
+    g_openCount = 1;
     g_curPath[0] = '\0';
-    g_loading = TRUE;
-    SetWindowTextA(hwndCode, "");
-    g_loading = FALSE;
     g_dirty = FALSE;
-    g_chkCount = 0;
-    show_current();
+    enter_tab(0);
+    if (wasCheats) g_tab = g_openCount;
+    layout(hwndMain);
 }
 
 /* Makes `dir` the project: the Explorer shows it, and its first.adda - or else
@@ -3841,7 +4072,7 @@ static void open_project(HWND hwnd, const char *dir)
     size_t n = strlen(dir);
     int i, first = -1;
 
-    close_file();
+    close_all_files();
     snprintf(g_projectDir, sizeof g_projectDir, "%s%s", dir,
              (n && dir[n - 1] == '\\') ? "" : "\\");
     remember_project();
@@ -4064,11 +4295,7 @@ static void ab_click(HWND hwnd, int item)
         break;
     case AB_CHEAT:
         g_cheatTab = TRUE;
-        g_tab = 1;
-        refresh_cheats();
-        layout(hwnd);
-        InvalidateRect(hwnd, NULL, FALSE);
-        if (hwndCheatFind && !g_cheatOpen) SetFocus(hwndCheatFind);
+        switch_tab(g_openCount);
         break;
     case AB_GEAR:
         open_settings(hwnd);
@@ -4130,6 +4357,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SendMessage(hwndConsole, WM_SETFONT, (WPARAM)hFontMono, TRUE);
         SendMessage(hwndFind,    WM_SETFONT, (WPARAM)hFontUI, TRUE);
         SendMessage(hwndCheatFind, WM_SETFONT, (WPARAM)hFontUI, TRUE);
+        /* greyed words in the empty box, as the Mac's has, so it reads as a search */
+        SendMessageW(hwndCheatFind, EM_SETCUEBANNER, TRUE, (LPARAM)L"What do you want to do?");
         SendMessage(hwndFiles,   WM_SETFONT, (WPARAM)hFontUI, TRUE);
 
         /* the EDIT default of 30000 characters is easy to hit in a console */
@@ -4205,7 +4434,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         p.x = GET_X_LPARAM(lParam);
         p.y = GET_Y_LPARAM(lParam);
 
-        if (g_tab == 1) {                 /* rows and the Back button light up */
+        if (on_cheats()) {                /* rows and the Back button light up */
             int row = cheat_row_at(p);
             BOOL back = g_cheatOpen && contains(g_cheatBack, p);
             if (row != g_cheatHot || back != g_cheatBackHot) {
@@ -4233,12 +4462,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         {
             int bar = bar_hit(p), x = -1, t;
-            for (t = 0; t < 2; t++)
+            for (t = 0; t < tab_count(); t++)
                 if (tab_x_shown(t) && contains(g_tabX[t], p)) x = t;
             if (x != g_tabXHot) {
+                if (g_tabXHot >= 0) InvalidateRect(hwnd, &g_tabRect[g_tabXHot], FALSE);
+                if (x >= 0)         InvalidateRect(hwnd, &g_tabRect[x], FALSE);
                 g_tabXHot = x;
-                InvalidateRect(hwnd, &g_tabRect[0], FALSE);
-                if (g_cheatTab) InvalidateRect(hwnd, &g_tabRect[1], FALSE);
             }
             if (bar != g_barHot) {
                 g_barHot = bar;
@@ -4321,7 +4550,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         p.x = GET_X_LPARAM(lParam);
         p.y = GET_Y_LPARAM(lParam);
         ScreenToClient(hwnd, &p);
-        if (g_tab == 1 && contains(g_cheatArea, p)) {
+        if (on_cheats() && contains(g_cheatArea, p)) {
             g_cheatScroll -= GET_WHEEL_DELTA_WPARAM(wParam) * S(40) / WHEEL_DELTA;
             cheat_clamp_scroll();
             InvalidateRect(hwnd, &g_cheatArea, FALSE);
@@ -4339,32 +4568,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         p.y = GET_Y_LPARAM(lParam);
 
         /* the x on a tab, which has to be tried before the tab itself */
-        for (at = 0; at < 2; at++) {
+        for (at = 0; at < tab_count(); at++) {
             if (!tab_x_shown(at) || !contains(g_tabX[at], p)) continue;
-            if (at == 0) {
-                close_file();                 /* saved, and out of the editor */
-            } else {
-                g_cheatTab = FALSE;
-                g_tab = 0;
-                SetFocus(hwndCode);
-            }
-            g_tabXHot = -1;
-            layout(hwnd);
-            InvalidateRect(hwnd, NULL, FALSE);
+            close_tab(at);                    /* a file is saved first */
             return 0;
         }
 
         /* the tab strip */
-        if (contains(g_tabRect[0], p) || contains(g_tabRect[1], p)) {
-            g_tab = contains(g_tabRect[1], p) ? 1 : 0;
-            if (g_tab == 1) refresh_cheats();
-            layout(hwnd);
-            InvalidateRect(hwnd, NULL, FALSE);
-            SetFocus(g_tab ? (g_cheatOpen ? hwnd : hwndCheatFind) : hwndCode);
+        for (at = 0; at < tab_count(); at++) {
+            if (!contains(g_tabRect[at], p)) continue;
+            switch_tab(at);
             return 0;
         }
 
-        if (g_tab == 1) {                 /* the cheat sheet owns the area */
+        if (on_cheats()) {                /* the cheat sheet owns the area */
             if (g_cheatOpen) {
                 if (contains(g_cheatBack, p)) show_cheat(NULL);
             } else {
@@ -4614,18 +4831,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
          * own page, goes back to the list first */
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
             HWND top = GetAncestor(msg.hwnd, GA_ROOT);
-            if (top == hwnd && g_tab == 1) {   /* back, then out of the sheet */
+            if (top == hwnd && on_cheats()) {   /* back, then out of the sheet */
                 if (g_cheatOpen) show_cheat(NULL);
-                else {
-                    g_tab = 0;
-                    layout(hwnd);
-                    InvalidateRect(hwnd, NULL, FALSE);
-                    SetFocus(hwndCode);
-                }
+                else switch_tab(g_fileTab);
                 continue;
             }
             if (top == hwndSettings) {
                 DestroyWindow(top);
+                continue;
+            }
+        }
+        /* Ctrl+Tab and Ctrl+Shift+Tab go round the tabs; Ctrl+W shuts one */
+        if (msg.message == WM_KEYDOWN && GetKeyState(VK_CONTROL) < 0 &&
+            GetAncestor(msg.hwnd, GA_ROOT) == hwnd) {
+            if (msg.wParam == VK_TAB) {
+                int n = tab_count();
+                switch_tab((g_tab + (GetKeyState(VK_SHIFT) < 0 ? n - 1 : 1)) % n);
+                continue;
+            }
+            if (msg.wParam == 'W') {
+                if (tab_x_shown(g_tab)) close_tab(g_tab);
                 continue;
             }
         }
@@ -4637,7 +4862,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int cmdShow)
         }
         /* the wheel is sent to the focused window, so hand it to the main one
          * whenever the pointer is over the cheat sheet */
-        if (msg.message == WM_MOUSEWHEEL && g_tab == 1) {
+        if (msg.message == WM_MOUSEWHEEL && on_cheats()) {
             POINT p;
             p.x = GET_X_LPARAM(msg.lParam);
             p.y = GET_Y_LPARAM(msg.lParam);
